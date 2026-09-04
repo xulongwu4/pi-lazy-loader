@@ -1,6 +1,6 @@
 # pi-lazy-loader
 
-Deferred on-demand extension loader for Pi coding agent. Recovers **4.257 seconds** (80.8%) of extension startup overhead across the ten highest-cost Phase 0 packages, loading them on-demand mid-session without `/reload`.
+Deferred on-demand extension loader for Pi coding agent. It can load ten profiled packages mid-session without `/reload`; the validated Fabric-compatible configuration currently defers web access, MCP, and dynamic workflows.
 
 ## Startup Overhead & Performance Impact
 
@@ -21,30 +21,41 @@ The ten packages below account for **80.8% (4.257 s)** of that overhead:
 | 9 | `npm:pi-web-access` | **0.100 s** | Web search, URL fetching, repo cloning, and PDF extraction |
 | 10 | `git:github.com/xulongwu4/pi-quotas` | **0.100 s** | API quota and token usage monitoring and status |
 
-Deferring these ten packages reduces startup time from **5.83 s to ~1.58 s**.
+The table is the Phase 0 opportunity map, not a recommendation to defer every entry. Phase 2.6 validated three packages: `pi-web-access`, `pi-mcp-adapter`, and `@quintinshaw/pi-dynamic-workflows`. Interleaved A/B testing measured at least **0.71 s** improvement from workflows alone; the earlier web/MCP trial improved its fresh-start minimum by **0.52 s**.
 
 ---
 
-## Configuration
+## Installation and Configuration
 
-To defer extension loading while keeping skills, prompts, and themes eager, configure the ten packages in `~/.pi/agent/settings.json` using Pi's object-form filter with `"extensions": []`:
+```bash
+pi install git:github.com/xulongwu4/pi-lazy-loader
+```
+
+Keep skills, prompts, and themes eager while filtering only the three validated extension entries in `~/.pi/agent/settings.json`:
 
 ```json
 {
   "packages": [
-    { "source": "npm:pi-fabric", "extensions": [] },
-    { "source": "npm:@zosmaai/pi-llm-wiki", "extensions": [] },
-    { "source": "npm:@tintinweb/pi-subagents", "extensions": [] },
+    "git:github.com/xulongwu4/pi-lazy-loader",
+    "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
-    { "source": "npm:@narumitw/pi-goal", "extensions": [] },
-    { "source": "npm:pi-token-burden", "extensions": [] },
-    { "source": "npm:pi-antigravity", "extensions": [] },
     { "source": "npm:pi-mcp-adapter", "extensions": [] },
-    { "source": "npm:pi-web-access", "extensions": [] },
-    { "source": "git:github.com/xulongwu4/pi-quotas", "extensions": [] }
+    { "source": "npm:pi-web-access", "extensions": [] }
   ]
 }
 ```
+
+When Fabric captures extension tools, keep the loader prompt-visible in `~/.pi/agent/fabric.json`:
+
+```json
+{
+  "capture": {
+    "keepVisible": ["fabric_exec", "lazy_load"]
+  }
+}
+```
+
+Other package entries remain unchanged and eager.
 
 ---
 
@@ -70,9 +81,9 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 
 ### 4. Fabric Gateway Compatibility
 
-Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly and the active set remains only `fabric_exec`.
+Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep `lazy_load` visible alongside `fabric_exec`; after each load the loader refreshes Fabric's catalog and restores that two-tool active set, preventing same-turn policy leaks.
 
-The Phase 2.5 guarded configuration therefore defers `pi-web-access` and `pi-mcp-adapter`, but not `pi-fabric`.
+The Phase 2.6 configuration therefore defers `pi-web-access`, `pi-mcp-adapter`, and `@quintinshaw/pi-dynamic-workflows`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
 
 ### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
@@ -98,10 +109,10 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
 - `lazy_load`: Strict TypeBox schema accepting exactly one string parameter:
   ```json
   {
-    "package": "pi-fabric"
+    "package": "@quintinshaw/pi-dynamic-workflows"
   }
   ```
-  Dynamically loads the target package and makes its tools (e.g. `fabric_exec`) available to the model within the same session.
+  Dynamically loads the target package and makes its tools available in the same session. Under Fabric, the tools are captured as `extensions.*` while the native active set remains `fabric_exec` plus `lazy_load`.
 
 ---
 

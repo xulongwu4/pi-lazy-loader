@@ -188,16 +188,22 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "lazy_load",
     label: "Lazy Load",
-    description: "Dynamically load a deferred package extension into the current session.",
+    description: "Load a deferred Pi extension: subagent delegation → @tintinweb/pi-subagents; workflows/research → @quintinshaw/pi-dynamic-workflows; web search/fetch → pi-web-access; MCP servers → pi-mcp-adapter.",
+    promptSnippet: "Load deferred capabilities: subagents, workflows, web search/fetch, or MCP servers",
+    promptGuidelines: [
+      "Use lazy_load before claiming a deferred subagent, workflow, web, or MCP capability is unavailable.",
+    ],
     parameters: Type.Object(
       {
         package: Type.String({
-          description: "Name or source locator of the deferred package to load (e.g. 'pi-fabric', '@zosmaai/pi-llm-wiki').",
+          description: "Package name or source; use @tintinweb/pi-subagents for delegation, @quintinshaw/pi-dynamic-workflows for workflows/research, pi-web-access for web, or pi-mcp-adapter for MCP.",
         }),
       },
       { additionalProperties: false }
     ),
     async execute(_toolCallId, params, _signal, onUpdate) {
+      const activeBefore = pi.getActiveTools?.() ?? [];
+      const fabricActive = activeBefore.includes("fabric_exec");
       if (report) {
         const toolsBefore = (pi.getAllTools?.() ?? []).map((t: any) => t.name);
         report.toolsBefore = toolsBefore;
@@ -216,9 +222,13 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
         details: {},
       });
       const result = await loader.loadPackage(params.package);
+      // Refresh Fabric's captured catalog, then keep newly registered tools off
+      // the native path during this same turn. Non-Fabric sessions retain Pi's
+      // normal behavior where dynamic tools become active immediately.
+      const toolsAfter = (pi.getAllTools?.() ?? []).map((t: any) => t.name);
+      if (fabricActive) pi.setActiveTools(activeBefore);
 
       if (report) {
-        const toolsAfter = (pi.getAllTools?.() ?? []).map((t: any) => t.name);
         report.fabricPresentAfter = toolsAfter.includes("fabric_exec");
         report.newTools = result.newTools ?? [];
         report.steps.push({

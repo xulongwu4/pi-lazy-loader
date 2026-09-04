@@ -1,7 +1,10 @@
 {
   "name": "pi-lazy-loader",
   "version": "0.1.0",
-  "description": "Lazy extension loader for Pi coding agent",
+  "description": "On-demand extension loader for Pi coding agent",
+  "repository": "github:xulongwu4/pi-lazy-loader",
+  "homepage": "https://github.com/xulongwu4/pi-lazy-loader#readme",
+  "bugs": "https://github.com/xulongwu4/pi-lazy-loader/issues",
   "type": "module",
   "main": "index.ts",
   "files": [
