@@ -110,7 +110,7 @@ Move token-burden's hardcoded mapping into its manifest entry:
 }
 ```
 
-The package entry supplies the canonical target package name. A command may optionally supply `targetLabel` for display; it defaults to the package `name`.
+The built-in package entry supplies the canonical target label through its `name`. User configuration may override that label once at package-group scope.
 
 ### User Configuration
 
@@ -126,23 +126,28 @@ Schema version 1:
 {
   "$schema": "https://raw.githubusercontent.com/xulongwu4/pi-lazy-loader/v0.3.0/lazy-loader.schema.json",
   "version": 1,
-  "commands": [
-    {
-      "package": "pi-mcp-adapter",
-      "name": "mcp",
-      "description": "Show MCP server status",
-      "targetLabel": "pi-mcp-adapter"
+  "packages": {
+    "pi-mcp-adapter": {
+      "targetLabel": "pi-mcp-adapter",
+      "commands": [
+        {
+          "name": "mcp",
+          "description": "Show MCP server status"
+        }
+      ]
     }
-  ]
+  }
 }
 ```
 
 Requirements:
 
 - `version` is required and must equal `1`.
-- `commands` is required and must be an array.
-- `package`, `name`, and `description` are required non-empty strings.
-- `targetLabel` is optional and cosmetic.
+- `packages` is required and must be an object keyed by package name or manifest alias. The wrapper keeps `$schema` and `version` separate from dynamic package keys and leaves room for future file-level metadata.
+- Each package value requires a `commands` array.
+- Each command requires non-empty `name` and `description` strings.
+- Package keys must resolve through the built-in manifest.
+- `targetLabel` is optional, cosmetic, and applies to every command in its package group; it defaults to the resolved manifest package name.
 - Command names omit the leading `/`.
 - Command names must match `^[a-z0-9][a-z0-9-]*$`.
 - Descriptions and labels must have bounded lengths defined by the shipped JSON Schema and reject control characters/newlines.
@@ -153,7 +158,7 @@ Requirements:
 
 ### Security Boundary
 
-A user declaration may reference only a package resolved by the existing built-in manifest aliases. It cannot provide `source`, `locator`, entry files, module paths, or code. Packages must already be installed and separately configured through Pi settings.
+A user package key may reference only a package resolved by the existing built-in manifest aliases. It cannot provide `source`, `locator`, entry files, module paths, or code. Packages must already be installed and separately configured through Pi settings.
 
 Only the global agent-directory file is read in v0.3.0. Project-specific eager/deferred selection continues to use trusted native Pi settings. The loader must not read an arbitrary project-local `lazy-loader.json`.
 
@@ -162,7 +167,7 @@ Only the global agent-directory file is read in v0.3.0. Project-specific eager/d
 Built-in declarations load first; valid user declarations overlay them.
 
 1. The identity key is `(resolved package name, command name)`.
-2. An exact user match may override `description` and `targetLabel`.
+2. An exact user command match may override `description`; a package-group `targetLabel` overrides the display label for every command in that group.
 3. Duplicate identical declarations collapse to one proxy.
 4. The same command name mapped to different packages is a conflict.
 5. Conflicted command names register no proxy; other valid declarations continue.
@@ -184,12 +189,21 @@ Extend `ManifestEntry`:
 interface CommandProxyDeclaration {
   name: string;
   description: string;
-  targetLabel?: string;
 }
 
 interface ManifestEntry {
   // existing fields
   commands?: CommandProxyDeclaration[];
+}
+
+interface UserPackageCommandConfig {
+  targetLabel?: string;
+  commands: CommandProxyDeclaration[];
+}
+
+interface UserCommandConfig {
+  version: 1;
+  packages: Record<string, UserPackageCommandConfig>;
 }
 ```
 
@@ -201,7 +215,8 @@ Add a focused module, for example `src/command-config.ts`, responsible only for:
 
 - reading the optional global file;
 - enforcing size and JSON shape;
-- resolving package aliases through `findManifestEntry`;
+- resolving each `packages` object key through `findManifestEntry`;
+- flattening validated package groups into merged runtime command definitions;
 - merging built-in and user declarations;
 - returning valid definitions plus diagnostics.
 
@@ -388,7 +403,7 @@ Write failing tests for:
 
 - manifest command validation;
 - missing/malformed/oversized user config;
-- package alias resolution;
+- package-keyed group validation and package alias resolution;
 - deterministic merge and conflict handling;
 - all commands reserved before first factory load;
 - completion behavior before and after load;
@@ -429,8 +444,8 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 | Area | Required checks |
 |---|---|
 | Manifest | valid command arrays; invalid names; duplicate keys; unknown fields |
-| User config | absent, valid, malformed JSON, wrong version, oversized, unknown package, conflict |
-| Merge | built-in only; user addition; user description override; deterministic conflict skip |
+| User config | absent, valid package groups, malformed JSON, wrong version, oversized, unknown package key, duplicate aliases, conflict |
+| Merge | built-in only; package-group addition; group target-label override; command description override; deterministic conflict skip |
 | Registration | eager target skips proxy; deferred target registers proxy; all package commands reserved first |
 | Loading | one factory for concurrent commands; all target handlers captured; unrelated registrations forwarded |
 | Invocation | exact args/context; async return; repeated invocation; unchanged loader-seam error |
