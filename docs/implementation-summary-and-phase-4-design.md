@@ -16,7 +16,7 @@ The validated configuration defers three packages:
 - `pi-mcp-adapter`
 - `@quintinshaw/pi-dynamic-workflows`
 
-`pi-fabric`, `@tintinweb/pi-subagents`, provider extensions, and extensions with required ambient behavior remain eager. Phase 4 is optional and is **not scheduled**; it exists to address concrete tool/command discovery failures without introducing broad semantic heuristics.
+`pi-fabric`, `@tintinweb/pi-subagents`, provider extensions, and extensions with required ambient behavior remain eager. Phase 4.0 was attempted and stopped with a verified NO-GO: the model bypassed the prompt-visible proxy and performed the work directly through Fabric. No Phase 4 runtime code shipped.
 
 ## Current Production Configuration
 
@@ -242,7 +242,7 @@ Unknown packages, missing package roots, unresolved entries, non-function defaul
 
 ### Status
 
-**Optional; not scheduled.** Phase 4 should begin only when normal dogfood produces one of the entry conditions below. It is not a general mandate to defer every extension.
+**Attempted; stopped at Phase 4.0.** The entry criteria were met by the subagent-discovery failure, but the live proxy acceptance test triggered a documented stop condition. See [`../PHASE4-RESULTS.md`](../PHASE4-RESULTS.md). Phases 4.1–4.3 remain cancelled unless Pi/Fabric tool-selection behavior materially changes.
 
 ### Entry Criteria
 
@@ -426,4 +426,4 @@ Stop Phase 4 and keep the package eager if any of these remain unresolved after 
 
 ## Recommended Next Action
 
-Do not implement Phase 4 immediately. Restart and dogfood `v0.1.1` across normal sessions. Open Phase 4.0 only after a repeated capability-discovery failure is captured in a trace. The first candidate is `lazy_agent`; all later proxy, command, and profile work remains contingent on that spike.
+Keep `@tintinweb/pi-subagents` eager. The Phase 4.0 `lazy_agent` spike failed because the parent bypassed the active proxy and used Fabric directly. Do not resume proxy, command, or profile work unless a future Pi/Fabric tool-selection change makes the unknown-nonce acceptance test pass.
