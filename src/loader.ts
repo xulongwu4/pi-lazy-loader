@@ -13,6 +13,13 @@ import * as typeboxValue from "typebox/value";
 
 import { MANIFEST, type ManifestEntry, findManifestEntry } from "./manifest.js";
 import { getUserAgentDir, resolvePackageEntries } from "./resolver.js";
+import { formatPostLoadDescription } from "./command-config.js";
+
+export interface ReserveCommandOptions {
+  declaredDescription?: string;
+  targetLabel?: string;
+  decorateDescription?: boolean;
+}
 
 export type PackageLoadStatus = "deferred" | "loading" | "loaded" | "failed";
 
@@ -85,7 +92,7 @@ export class LazyLoader {
     resourcesDiscover: null,
   };
   private agentDir: string;
-  private reservedCommands = new Map<string, Set<string>>();
+  private reservedCommands = new Map<string, Map<string, ReserveCommandOptions>>();
   private capturedCommands = new Map<string, any>();
 
   constructor(pi: any, agentDir?: string, syncSettings = true) {
@@ -148,12 +155,32 @@ export class LazyLoader {
     return Array.from(this.states.values());
   }
 
-  reserveCommand(identifier: string, commandName: string): void {
+  reserveCommand(identifier: string, commandName: string, metadata?: ReserveCommandOptions): void {
     const manifest = findManifestEntry(identifier);
     if (!manifest) throw new Error(`Unknown package "${identifier}"`);
-    const names = this.reservedCommands.get(manifest.name) ?? new Set<string>();
-    names.add(commandName);
-    this.reservedCommands.set(manifest.name, names);
+    let names = this.reservedCommands.get(manifest.name);
+    if (!names) {
+      names = new Map<string, ReserveCommandOptions>();
+      this.reservedCommands.set(manifest.name, names);
+    }
+    names.set(commandName, metadata ?? {});
+  }
+
+  isCommandCaptured(identifier: string, commandName: string): boolean {
+    const manifest = findManifestEntry(identifier);
+    if (!manifest) return false;
+    return this.capturedCommands.has(`${manifest.name}:${commandName}`);
+  }
+
+  getCommandStatus(identifier: string, commandName: string): "deferred" | "ready" | "missing" | "failed" | "loading" {
+    const pkgState = this.getPackageState(identifier);
+    if (!pkgState) return "deferred";
+    if (pkgState.status === "loaded") {
+      return this.isCommandCaptured(identifier, commandName) ? "ready" : "missing";
+    }
+    if (pkgState.status === "failed") return "failed";
+    if (pkgState.status === "loading") return "loading";
+    return "deferred";
   }
 
   async invokeCapturedCommand(identifier: string, commandName: string, args: string, ctx: any): Promise<any> {
@@ -232,10 +259,42 @@ export class LazyLoader {
         const entries = resolvePackageEntries(manifest, this.agentDir);
         const toolsBefore = new Set((this.pi?.getAllTools?.() ?? []).map((t: any) => t.name));
 
+        const stagedRegistrations = new Map<string, any>();
         const newlyLoaded: string[] = [];
         for (const entryPath of entries) {
-          await this.loadSingleEntry(entryPath, manifest.name);
+          await this.loadSingleEntry(entryPath, manifest.name, stagedRegistrations);
           newlyLoaded.push(entryPath);
+        }
+
+        // Commit staged registrations atomically only after all entries and lifecycle replay succeeded
+        for (const [name, targetOptions] of stagedRegistrations.entries()) {
+          this.capturedCommands.set(`${manifest.name}:${name}`, targetOptions);
+
+          const meta = this.reservedCommands.get(manifest.name)?.get(name);
+          const shouldDecorate =
+            meta?.decorateDescription ??
+            (meta?.declaredDescription !== undefined || meta?.targetLabel !== undefined);
+
+          let committedOptions: any;
+          if (shouldDecorate) {
+            const decoratedDescription = formatPostLoadDescription(
+              {
+                packageName: manifest.name,
+                commandName: name,
+                declaredDescription: meta?.declaredDescription,
+                targetLabel: meta?.targetLabel,
+              },
+              targetOptions?.description
+            );
+            committedOptions = {
+              ...targetOptions,
+              description: decoratedDescription,
+            };
+          } else {
+            committedOptions = { ...targetOptions };
+          }
+
+          this.pi.registerCommand(name, committedOptions);
         }
 
         const toolsAfter = (this.pi?.getAllTools?.() ?? []).map((t: any) => t.name);
@@ -280,7 +339,11 @@ export class LazyLoader {
   /**
    * Load and initialize a single extension entry file with jiti and lifecycle replay.
    */
-  private async loadSingleEntry(entryPath: string, packageName: string): Promise<void> {
+  private async loadSingleEntry(
+    entryPath: string,
+    packageName: string,
+    stagedRegistrations?: Map<string, any>
+  ): Promise<void> {
     const jiti = createJiti(import.meta.url, {
       moduleCache: false,
       tryNative: false,
@@ -300,6 +363,11 @@ export class LazyLoader {
         if (prop === "registerCommand") {
           return (name: string, command: any) => {
             if (this.reservedCommands.get(packageName)?.has(name)) {
+              if (stagedRegistrations) {
+                // Stage intercepted registration for atomic commit upon successful load
+                stagedRegistrations.set(name, command);
+                return;
+              }
               this.capturedCommands.set(`${packageName}:${name}`, command);
             }
             return target.registerCommand(name, command);

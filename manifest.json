@@ -39,7 +39,13 @@
     "source": "npm:pi-token-burden",
     "locator": "npm:pi-token-burden",
     "cost": 0.300,
-    "capability": "Token-budget breakdown of system prompt (/token-burden)"
+    "capability": "Token-budget breakdown of system prompt (/token-burden)",
+    "commands": [
+      {
+        "name": "token-burden",
+        "description": "Show token-budget usage"
+      }
+    ]
   },
   {
     "name": "pi-antigravity",
@@ -53,7 +59,21 @@
     "source": "npm:pi-mcp-adapter",
     "locator": "npm:pi-mcp-adapter",
     "cost": 0.200,
-    "capability": "Model Context Protocol (MCP) server adapter and tools"
+    "capability": "Model Context Protocol (MCP) server adapter and tools",
+    "commands": [
+      {
+        "name": "mcp",
+        "description": "Show MCP server status"
+      },
+      {
+        "name": "pi-mcp",
+        "description": "Show MCP server status"
+      },
+      {
+        "name": "mcp-auth",
+        "description": "Authenticate with an MCP server"
+      }
+    ]
   },
   {
     "name": "pi-web-access",

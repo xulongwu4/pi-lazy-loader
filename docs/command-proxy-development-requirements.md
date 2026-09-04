@@ -78,14 +78,19 @@ startup
 
 first invocation (stub handler already on the call stack)
   → load target package
-  → capture target registerCommand(name, realOptions)
-  → forward registerCommand through the same pi-lazy-loader ExtensionAPI
-  → Pi's extension.commands.set(name, ...) replaces the stub entry
+  → intercept target registerCommand(name, realOptions) and STAGE if reserved
+  → non-reserved commands forward to Pi immediately
+  → upon successful load and lifecycle replay completion:
+      → COMMIT staged registrations: forward a shallow clone of target options with decorated description
+      → Pi's extension.commands.set(name, ...) replaces the stub entry in the command map
+  → if load or lifecycle replay fails:
+      → COMMIT NOTHING; startup stub remains in place for retry and diagnostics
   → call the captured real handler for this in-flight invocation
 
 subsequent invocation
   /command → forwarded real command definition directly
-  description/completions/handler → target options
+  description → target description decorated with delegated attribution
+  completions/handler → target options directly by reference (unwrapped)
   sourceInfo → pi-lazy-loader (unchanged canonical registrar)
 ```
 
@@ -93,7 +98,7 @@ The first invocation cannot redispatch the slash command because command parsing
 
 Forwarding through the same `ExtensionAPI` is load-bearing: Pi performs a map replacement within one extension instead of resolving two extension-owned commands as `/command:1` and `/command:2`.
 
-If loading fails or the target never registers the declared command, no replacement occurs; the startup stub remains available so a later invocation can report or retry the failure.
+Command replacement is atomic: while a package loads, intercepted registrations for reserved command names are staged, not forwarded immediately. Only after the whole package load succeeds — every declared entry loaded and lifecycle replay completed — do we commit the staged registrations by forwarding them through the same `ExtensionAPI`. If anything fails, commit nothing; the startup stub stays in place so the user can retry and see a real diagnostic. Non-reserved commands from the same factory continue to forward immediately and unchanged.
 
 ## Configuration Model
 
@@ -176,16 +181,17 @@ String entries are shorthand for `{ "name": "<string>" }`. They intentionally om
 Requirements:
 
 - `version` is required and must equal `1`.
+- `$schema` is optional; if present, it must be a string, is ignored at runtime, and is exempt from unknown-field rejection.
 - `packages` is required and must be an object keyed by package name or manifest alias. The wrapper keeps `$schema` and `version` separate from dynamic package keys and leaves room for future file-level metadata.
 - Each package value requires a `commands` array whose items may be command-name strings or command objects.
 - A string item is equivalent to `{ "name": item }` and is normalized before merge/conflict processing.
 - An object item requires only a non-empty `name`; `description` is optional.
 - Package keys must resolve through the built-in manifest.
-- `targetLabel` is optional, cosmetic, and applies to every command in its package group; it defaults to the resolved manifest package name.
+- `targetLabel` is optional and supplemental only: it applies to every command in its package group and is rendered alongside, never instead of, the resolved manifest package name.
 - Command names omit the leading `/`.
 - Command names must match `^[a-z0-9][a-z0-9-]*$`.
 - Descriptions and labels, when provided, must have bounded lengths defined by the shipped JSON Schema and reject empty values, control characters, and newlines.
-- Unknown fields are rejected.
+- Unknown fields are rejected (except `$schema`).
 - The file size is limited to 64 KiB.
 - Missing configuration is valid and means “built-ins only.”
 - Configuration changes take effect on `/reload` or restart. No watcher is added.
@@ -224,11 +230,11 @@ The shipped JSON Schema must express the command-item union directly:
 }
 ```
 
-### Security Boundary
+### Security Boundary and Settings Scope
 
 A user package key may reference only a package resolved by the existing built-in manifest aliases. It cannot provide `source`, `locator`, entry files, module paths, or code. Packages must already be installed and separately configured through Pi settings.
 
-Only the global agent-directory file is read in v0.3.0. Project-specific eager/deferred selection continues to use trusted native Pi settings. The loader must not read an arbitrary project-local `lazy-loader.json`.
+Only the global agent-directory file is read in v0.3.0. In addition, `syncConfiguredEager()` observes the global agent-directory package filters (`${agentDir}/settings.json`) only. Project-scoped filtering is a known limitation in v0.3.0: project-level overrides in `.pi/settings.json` are not merged by the loader, meaning a project-level override can leave a proxy registered for an eager package, or absent for a deferred one. The loader must not read an arbitrary project-local `lazy-loader.json`.
 
 ## Merge and Validation Rules
 
@@ -320,15 +326,19 @@ Each registered command must:
 6. forward the captured target registration through the same public `ExtensionAPI`, so Pi replaces the startup stub with the target definition in the existing command-map slot;
 7. record proxy/target/package details when diagnostic reporting is enabled.
 
-### FR-5: Target Registration Capture
+### FR-5: Target Registration Capture and Staged Commit
 
 The existing late-factory `ExtensionAPI` proxy must intercept `registerCommand(name, options)`.
 
-- If `(package, name)` is reserved, store the complete command options and forward the registration to Pi, replacing the startup stub.
-- Otherwise forward registration to Pi unchanged.
-- Captured definitions are isolated by package and command name.
-- Multiple commands from one factory are captured independently.
-- Repeated target registrations for the same reserved key preserve Pi's normal last-write-wins behavior: update the captured definition and forward the latest options into the same command-map slot. They must not create numeric suffixes.
+- If `(package, name)` is reserved:
+  - While loading, *stage* the registration options (do not forward to Pi immediately).
+  - Repeated target registrations for the same reserved key update the staged definition (last-write-wins).
+- Non-reserved commands from the same factory are forwarded to Pi immediately and unchanged.
+- Only after all package entries have loaded and lifecycle replay has succeeded, *commit* the staged registrations:
+  - Store target options in captured definitions for in-flight invocation.
+  - Forward a shallow clone of the target options with decorated description through the same public `ExtensionAPI`, replacing the startup stub in Pi's command map.
+  - Never mutate the target's original options object; `handler`, `getArgumentCompletions`, and other properties pass through by reference.
+- If package load or lifecycle replay fails, commit nothing: the startup stub remains in place for subsequent retry and diagnostics.
 - Target commands must register synchronously or within the awaited extension factory. Registration after package load completion is unsupported and diagnosed.
 
 ### FR-6: Invocation Semantics
@@ -340,7 +350,7 @@ The existing late-factory `ExtensionAPI` proxy must intercept `registerCommand(n
 - asynchronous return behavior;
 - thrown error identity at the loader seam.
 
-The UI-facing proxy may catch the error only to display a clear notification. It must retain package and command names in diagnostics.
+The UI-facing startup proxy stub may catch errors only during the first (in-flight) invocation to display a clear notification. After a successful handoff, the target command definition owns its own errors directly; the loader does not wrap the target handler.
 
 Concurrent first invocations of different proxies belonging to the same package must share the package's existing in-flight load promise. The factory executes once.
 
@@ -391,23 +401,30 @@ before load: Show MCP server status [lazy target: pi-mcp-adapter; proxy: pi-lazy
 after load:  <real target description> [target: pi-mcp-adapter; via pi-lazy-loader]
 ```
 
+If a custom `targetLabel` is configured, it is rendered alongside the resolved manifest package name, never replacing it:
+
+```text
+before load: Show MCP server status [lazy target: pi-mcp-adapter (my-label); proxy: pi-lazy-loader]
+after load:  <real target description> [target: pi-mcp-adapter (my-label); via pi-lazy-loader]
+```
+
 Description precedence is deterministic:
 
 ```text
-startup base:   declaration.description ?? `Load <target> on first use for /<command>`
+startup base:   declaration.description ?? `Load <targetDisplay> on first use for /<command>`
 post-load base: target.description ?? declaration.description ?? `Run /<command>`
 ```
 
-Append delegated attribution to the selected base. Thus configuration authors never need to invent text merely to register a proxy, while a real target description wins after loading. All other target options, including completion behavior and handler, pass through unchanged.
+Append delegated attribution to the selected base. When committing, forward a shallow clone of the target's options with only `description` decorated; `handler`, `getArgumentCompletions`, and every other property pass through by reference. Never mutate the target's own options object.
 
 Requirements:
 
-- before load, target label is visible in the synthesized command description;
+- before load, resolved package name (and supplemental target label if provided) is visible in the command description;
 - after load, the target's real description, declared fallback, or synthesized fallback (in that order), completions, and delegated attribution are visible;
 - proxy ownership is not hidden before or after handoff;
 - labels come from validated data, never paths or executable values;
 - eager commands retain their genuine target-package `sourceInfo` because no proxy is registered;
-- `/lazy list` shows each proxy as `/command → target-package`.
+- `/lazy list` shows each proxy and per-command readiness.
 
 If Pi later adds a supported delegated-provenance field (for example `proxyFor`), use it while preserving the textual fallback. Native support is not a v0.3.0 blocker.
 
@@ -421,7 +438,7 @@ Diagnostics must distinguish:
 - target package failed to load;
 - package loaded but did not register the declared command (command proxy fails; the successfully loaded package is not reloaded);
 - repeated target registration (diagnostic only; latest definition remains authoritative);
-- target handler failure;
+- target handler failure during the first in-flight invocation (after a successful handoff the target owns its own errors and the loader does not wrap it);
 - unsupported late registration;
 - missing UI for a UI-only command.
 
@@ -429,12 +446,14 @@ Messages include proxy command, target command, and package. Do not report a com
 
 ### FR-12: Status and Management Commands
 
-Extend `/lazy list` output for packages with command proxies:
+Extend `/lazy list` output for packages with command proxies, showing per-command readiness:
 
 ```text
-[deferred] pi-mcp-adapter  commands: /mcp, /pi-mcp, /mcp-auth
-[loaded]   pi-token-burden commands: /token-burden
+[deferred] pi-mcp-adapter  cost: 0.200s | ... (commands: /mcp [deferred], /mcp-auth [deferred], /pi-mcp [deferred])
+[loaded  ] pi-token-burden cost: 0.300s | ... (commands: /token-burden [ready])
 ```
+
+Package status alone must not imply a command is available. Show per-command state, distinguishing at minimum `deferred`, `ready`, and `missing` (package loaded but never registered that command).
 
 `/lazy add <package>` must populate all reserved command handlers as a side effect of normal package loading. `/lazy pin <package>` changes only next-startup settings; current-session proxies remain valid until restart.
 
@@ -522,7 +541,7 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 | Provenance | sourceInfo remains loader; startup and post-load descriptions show target/proxy; target description is preserved; eager source genuine |
 | MCP | `/mcp`, `/pi-mcp`, `/mcp-auth`; generated prompt commands appear after first load |
 | Token burden | genuine overlay; first and repeated calls; no hardcoded registrar remains |
-| Packaging | eight-plus-schema runtime files only; no duplicate Pi peers; clean install smoke |
+| Packaging | explicit allowlist of published files (index.ts, manifest.json, src, README.md, lazy-loader.schema.json); no duplicate Pi peers; clean install smoke |
 | Configuration safety | settings/fabric symlinks preserved; no automatic settings rewrite |
 | Performance | proxy startup budget; per-package alternating A/B; first-use latency reported |
 

@@ -11,7 +11,8 @@
     "index.ts",
     "manifest.json",
     "src",
-    "README.md"
+    "README.md",
+    "lazy-loader.schema.json"
   ],
   "keywords": [
     "pi-package",
@@ -24,7 +25,8 @@
   },
   "scripts": {
     "check": "bun checks/run-checks.ts",
-    "check:command": "bun checks/phase4-command-checks.ts"
+    "check:command": "bun checks/phase4-command-checks.ts",
+    "check:proxy": "bun checks/command-proxy-checks.ts"
   },
   "dependencies": {
     "jiti": "^2.4.2"

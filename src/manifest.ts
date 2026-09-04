@@ -1,5 +1,10 @@
 import rawManifest from "../manifest.json" with { type: "json" };
 
+export interface CommandProxyDeclaration {
+  name: string;
+  description?: string;
+}
+
 export interface ManifestEntry {
   name: string;
   source: string;
@@ -7,6 +12,7 @@ export interface ManifestEntry {
   cost: number;
   capability: string;
   aliases?: string[];
+  commands?: CommandProxyDeclaration[];
 }
 
 export const MANIFEST: ManifestEntry[] = (rawManifest as ManifestEntry[]).map((entry) => {

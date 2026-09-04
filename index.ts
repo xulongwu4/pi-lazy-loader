@@ -5,6 +5,11 @@ import { Type } from "typebox";
 import { LazyLoader, type PackageState } from "./src/loader.js";
 import { MANIFEST } from "./src/manifest.js";
 import { getUserSettingsPath, pinPackageInSettingsFile } from "./src/settings.js";
+import {
+  loadCommandConfig,
+  formatStartupDescription,
+  type MergedCommandDefinition,
+} from "./src/command-config.js";
 
 function formatStatus(status: PackageState["status"]): string {
   switch (status) {
@@ -20,20 +25,43 @@ function formatStatus(status: PackageState["status"]): string {
   }
 }
 
-export function formatPackageList(states: PackageState[]): string {
+export function formatPackageList(
+  states: PackageState[],
+  definitions?: MergedCommandDefinition[],
+  loader?: LazyLoader
+): string {
   const lines: string[] = ["Lazy-Loadable Packages:"];
   for (const s of states) {
     const costStr = `${s.manifest.cost.toFixed(3)}s`;
     const status = formatStatus(s.status);
     const err = s.error ? ` [ERROR: ${s.error}]` : "";
     const tools = s.newTools.length > 0 ? ` (tools: ${s.newTools.join(", ")})` : "";
-    lines.push(`  [${status}] ${s.manifest.name.padEnd(35)} cost: ${costStr.padStart(6)} | ${s.manifest.capability}${tools}${err}`);
+    const pkgDefs = definitions?.filter((d) => d.packageName === s.manifest.name) ?? [];
+    let cmds = "";
+    if (pkgDefs.length > 0) {
+      const cmdParts = pkgDefs.map((d) => {
+        const cmdStatus = loader
+          ? loader.getCommandStatus(s.manifest.name, d.commandName)
+          : s.status === "loaded"
+            ? "ready"
+            : s.status;
+        return `/${d.commandName} [${cmdStatus}]`;
+      });
+      cmds = ` (commands: ${cmdParts.join(", ")})`;
+    }
+    lines.push(`  [${status}] ${s.manifest.name.padEnd(35)} cost: ${costStr.padStart(6)} | ${s.manifest.capability}${tools}${cmds}${err}`);
   }
   return lines.join("\n");
 }
 
 export default function lazyLoaderExtension(pi: ExtensionAPI) {
   const loader = new LazyLoader(pi);
+
+  // Load merged command proxy configurations and write diagnostics to stderr
+  const { definitions, diagnostics } = loadCommandConfig();
+  for (const diag of diagnostics) {
+    console.error(`[pi-lazy-loader] ${diag}`);
+  }
 
   // Optional test / diagnostic report writer (only active when PI_LAZY_REPORT_PATH is set)
   const reportPath = process.env.PI_LAZY_REPORT_PATH;
@@ -63,6 +91,9 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   pi.on("session_start", (event: any, ctx: any) => {
     loader.setSessionStart(event, ctx);
     loader.syncConfiguredEager();
+    if (diagnostics.length > 0 && ctx.hasUI) {
+      ctx.ui.notify(`pi-lazy-loader: ${diagnostics.join("; ")}`, "warning");
+    }
     if (report) {
       report.sessionStartCaptured = true;
       saveReport();
@@ -97,29 +128,55 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     });
   }
 
-  // 2. Register a deterministic command proxy only when token-burden is deferred.
-  if (loader.getPackageState("pi-token-burden")?.status === "deferred") {
-    loader.reserveCommand("pi-token-burden", "token-burden");
-    pi.registerCommand("token-burden", {
-      description: "Load pi-token-burden on first use and show its real token budget UI",
-      handler: async (args, ctx) => {
-        const loaded = await loader.loadPackage("pi-token-burden");
+  // 2. Register manifest-driven and user-configured command proxies for deferred packages
+  // FR-3: Reserve ALL declared commands for deferred packages before registering any proxy
+  const deferredDefinitions: MergedCommandDefinition[] = [];
+  const packageDefinitions = new Map<string, MergedCommandDefinition[]>();
+
+  for (const def of definitions) {
+    const list = packageDefinitions.get(def.packageName) ?? [];
+    list.push(def);
+    packageDefinitions.set(def.packageName, list);
+  }
+
+  for (const [pkgName, defs] of packageDefinitions.entries()) {
+    if (loader.getPackageState(pkgName)?.status === "deferred") {
+      for (const def of defs) {
+        loader.reserveCommand(def.packageName, def.commandName, {
+          declaredDescription: def.description,
+          targetLabel: def.targetLabel,
+          decorateDescription: true,
+        });
+        deferredDefinitions.push(def);
+      }
+    }
+  }
+
+  // Register startup stubs
+  for (const def of deferredDefinitions) {
+    pi.registerCommand(def.commandName, {
+      description: formatStartupDescription(def),
+      getArgumentCompletions(_prefix: string) {
+        return null;
+      },
+      handler: async (args: string, ctx: ExtensionCommandContext) => {
+        const loaded = await loader.loadPackage(def.packageName);
         if (!loaded.success) {
-          const message = `Failed to load pi-token-burden: ${loaded.error}`;
+          const message = `Failed to load ${def.packageName}: ${loaded.error}`;
           if (ctx.hasUI) ctx.ui.notify(message, "error");
           else console.error(message);
           return;
         }
         if (report) {
-          report.steps.push({ step: "proxy_call", proxy: "/token-burden", target: "token-burden" });
+          report.steps.push({ step: "proxy_call", proxy: `/${def.commandName}`, target: def.commandName });
           saveReport();
         }
         try {
-          return await loader.invokeCapturedCommand("pi-token-burden", "token-burden", args, ctx);
+          return await loader.invokeCapturedCommand(def.packageName, def.commandName, args, ctx);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (ctx.hasUI) ctx.ui.notify(`token-burden failed: ${message}`, "error");
-          else console.error(`token-burden failed: ${message}`);
+          if (ctx.hasUI) ctx.ui.notify(`${def.commandName} failed: ${message}`, "error");
+          else console.error(`${def.commandName} failed: ${message}`);
         }
       },
     });
@@ -150,7 +207,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
 
       if (subcommand === "list") {
         const states = loader.getAllStates();
-        const text = formatPackageList(states);
+        const text = formatPackageList(states, definitions, loader);
         if (ctx.hasUI) {
           ctx.ui.notify(text, "info");
         }

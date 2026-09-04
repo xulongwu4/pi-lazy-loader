@@ -95,8 +95,12 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
 
 ### Slash Commands
 
-- `/token-burden`: Lightweight startup stub registered only when `pi-token-burden` is filtered. Before first use it shows a synthesized lazy description. Loading captures and forwards the target registration, so the real description, completions, and handler replace the stub; the first invocation calls the captured real handler in-process.
-- `/lazy list`: Show status (`deferred`, `loading`, `loaded`, `failed`), measured startup cost, and capabilities for all 10 packages.
+- Command Proxies: Built-in stubs for deferred packages (`/mcp`, `/pi-mcp`, `/mcp-auth` from `pi-mcp-adapter`; `/token-burden` from `pi-token-burden`), plus user-declared proxies from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json`.
+  - Registered only when the target package is deferred (`"extensions": []`).
+  - Pre-load completions return `null` without loading the package.
+  - First invocation executes the target factory once, stages and atomically commits registrations, forwards decorated description with delegated provenance (`[target: <pkg>; via pi-lazy-loader]`), and invokes the captured real handler for the in-flight call.
+  - Replacement within Pi's command map creates no numeric `:1` suffixes.
+- `/lazy list`: Show status (`deferred`, `loading`, `loaded`, `failed`), measured startup cost, capabilities, and per-command readiness (`deferred`, `ready`, `missing`) for all packages.
 - `/lazy add <package>`: Dynamically load a package extension into the current session.
   - Idempotent: Subsequent calls return immediately.
   - Concurrent-safe: In-flight calls share a single promise.
@@ -127,6 +131,7 @@ bun checks/run-checks.ts
 ```
 
 Run `bun checks/phase4-command-checks.ts` for command-proxy capture, concurrency, repeat-call, forwarding, and error checks.
+Run `bun checks/command-proxy-checks.ts` for manifest command validation, user configuration, atomic staged-commit, multi-command capture, and packaging allowlist checks.
 
 The suite covers:
 1. **File/Directory Entry Resolution**: Validates resolution of single files, directory conventions (`llm-wiki/index.ts`), and multi-file packages (`pi-quotas` 6 entries), plus error handling.
