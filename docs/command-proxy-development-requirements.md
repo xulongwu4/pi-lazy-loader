@@ -74,7 +74,7 @@ A command proxy has three observable states:
 ```text
 startup
   /command → startup stub
-  description → declared lazy description + target attribution
+  description → declared description or synthesized fallback + target attribution
 
 first invocation (stub handler already on the call stack)
   → load target package
@@ -160,8 +160,7 @@ Schema version 1:
       "targetLabel": "pi-mcp-adapter",
       "commands": [
         {
-          "name": "mcp",
-          "description": "Show MCP server status"
+          "name": "mcp"
         }
       ]
     }
@@ -169,17 +168,19 @@ Schema version 1:
 }
 ```
 
+This intentionally omits `description`: the startup stub synthesizes one from `targetLabel` and `name`, then inherits the target command's real description after loading.
+
 Requirements:
 
 - `version` is required and must equal `1`.
 - `packages` is required and must be an object keyed by package name or manifest alias. The wrapper keeps `$schema` and `version` separate from dynamic package keys and leaves room for future file-level metadata.
 - Each package value requires a `commands` array.
-- Each command requires non-empty `name` and `description` strings.
+- Each command requires only a non-empty `name`; `description` is optional.
 - Package keys must resolve through the built-in manifest.
 - `targetLabel` is optional, cosmetic, and applies to every command in its package group; it defaults to the resolved manifest package name.
 - Command names omit the leading `/`.
 - Command names must match `^[a-z0-9][a-z0-9-]*$`.
-- Descriptions and labels must have bounded lengths defined by the shipped JSON Schema and reject control characters/newlines.
+- Descriptions and labels, when provided, must have bounded lengths defined by the shipped JSON Schema and reject empty values, control characters, and newlines.
 - Unknown fields are rejected.
 - The file size is limited to 64 KiB.
 - Missing configuration is valid and means “built-ins only.”
@@ -196,11 +197,11 @@ Only the global agent-directory file is read in v0.3.0. Project-specific eager/d
 Built-in declarations load first; valid user declarations overlay them.
 
 1. The identity key is `(resolved package name, command name)`.
-2. An exact user command match may override `description`; a package-group `targetLabel` overrides the display label for every command in that group.
+2. An exact user command match may override `description` when it provides one; omitting it preserves the built-in value. A package-group `targetLabel` overrides the display label for every command in that group.
 3. Duplicate identical declarations collapse to one proxy.
 4. The same command name mapped to different packages is a conflict.
 5. Conflicted command names register no proxy; other valid declarations continue.
-6. Unknown packages, malformed names, empty descriptions, oversized files, unsupported versions, and unknown fields produce diagnostics and are skipped.
+6. Unknown packages, malformed names, explicitly empty/invalid descriptions, oversized files, unsupported versions, and unknown fields produce diagnostics and are skipped.
 7. Invalid entries must not crash Pi startup.
 8. Diagnostics are written to stderr immediately and shown once through `ctx.ui.notify` at `session_start` when UI is available.
 9. Validation must be deterministic; declaration ordering must not change conflict outcomes.
@@ -217,7 +218,7 @@ Extend `ManifestEntry`:
 ```ts
 interface CommandProxyDeclaration {
   name: string;
-  description: string;
+  description?: string;
 }
 
 interface ManifestEntry {
@@ -270,7 +271,7 @@ registerCommandProxies({ pi, loader, definitions, diagnostics });
 Each registered command must:
 
 1. use the declared command name;
-2. use a description that exposes target and proxy attribution;
+2. compute a description from the declared text or synthesized fallback and expose target/proxy attribution;
 3. load the target package on invocation;
 4. report load failure clearly;
 5. invoke the captured target handler with original arguments and context;
@@ -328,7 +329,7 @@ MCP prompt commands generated from server prompts are not declared upfront. They
 - still opens the genuine Token Burden overlay on first use;
 - still invokes the captured handler for the in-flight first call;
 - subsequent calls use the forwarded real command definition;
-- the synthesized description is replaced by the real description and completions;
+- the startup description is replaced by the real target description when present, otherwise by the declared or synthesized fallback, together with real completions;
 - no duplicate `/token-burden:1` command appears.
 
 Delete the per-command branch from `index.ts` after the generic path passes its tests.
@@ -348,12 +349,19 @@ before load: Show MCP server status [lazy target: pi-mcp-adapter; proxy: pi-lazy
 after load:  <real target description> [target: pi-mcp-adapter; via pi-lazy-loader]
 ```
 
-When forwarding the real options in v0.3.0, preserve the target description as the base text and append delegated attribution. If the target omits a description, use the validated declared description as the base. All other target options, including completion behavior and handler, pass through unchanged.
+Description precedence is deterministic:
+
+```text
+startup base:   declaration.description ?? `Load <target> on first use for /<command>`
+post-load base: target.description ?? declaration.description ?? `Run /<command>`
+```
+
+Append delegated attribution to the selected base. Thus configuration authors never need to invent text merely to register a proxy, while a real target description wins after loading. All other target options, including completion behavior and handler, pass through unchanged.
 
 Requirements:
 
 - before load, target label is visible in the synthesized command description;
-- after load, the target's real description (or declared fallback), completions, and delegated attribution are visible;
+- after load, the target's real description, declared fallback, or synthesized fallback (in that order), completions, and delegated attribution are visible;
 - proxy ownership is not hidden before or after handoff;
 - labels come from validated data, never paths or executable values;
 - eager commands retain their genuine target-package `sourceInfo` because no proxy is registered;
@@ -418,7 +426,7 @@ Extend `/lazy list` output for packages with command proxies:
 
 Write failing tests for:
 
-- manifest command validation;
+- manifest command validation, including omitted-description fallback;
 - missing/malformed/oversized user config;
 - package-keyed group validation and package alias resolution;
 - deterministic merge and conflict handling;
@@ -460,9 +468,9 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 
 | Area | Required checks |
 |---|---|
-| Manifest | valid command arrays; invalid names; duplicate keys; unknown fields |
+| Manifest | valid command arrays; omitted descriptions; invalid names/descriptions; duplicate keys; unknown fields |
 | User config | absent, valid package groups, malformed JSON, wrong version, oversized, unknown package key, duplicate aliases, conflict |
-| Merge | built-in only; package-group addition; group target-label override; command description override; deterministic conflict skip |
+| Merge | built-in only; package-group addition; omitted description preserves built-in; group target-label override; description override; deterministic conflict skip |
 | Registration | eager target skips proxy; deferred target registers proxy; all package commands reserved first |
 | Loading | one factory for concurrent commands; all target handlers captured; unrelated registrations forwarded |
 | Invocation | first call uses captured handler; exact args/context; async return; subsequent call uses forwarded real handler; unchanged loader-seam error |
@@ -487,7 +495,7 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 5. User configuration can add or override command metadata for existing manifest packages.
 6. Invalid user configuration fails softly with actionable diagnostics.
 7. Pre-load Tab completion never imports a deferred package.
-8. Post-load description and completion come from the forwarded real command definition.
+8. Post-load completion comes from the forwarded real definition; description follows target → declaration → synthesized precedence.
 9. Command help visibly identifies both target and proxy.
 10. Canonical `sourceInfo` remains unmodified and documented.
 11. `/lazy list` displays command proxy mappings and readiness.
