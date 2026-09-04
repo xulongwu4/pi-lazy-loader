@@ -159,8 +159,11 @@ Schema version 1:
     "pi-mcp-adapter": {
       "targetLabel": "pi-mcp-adapter",
       "commands": [
+        "mcp",
+        "pi-mcp",
         {
-          "name": "mcp"
+          "name": "mcp-auth",
+          "description": "Authenticate with an MCP server"
         }
       ]
     }
@@ -168,14 +171,15 @@ Schema version 1:
 }
 ```
 
-This intentionally omits `description`: the startup stub synthesizes one from `targetLabel` and `name`, then inherits the target command's real description after loading.
+String entries are shorthand for `{ "name": "<string>" }`. They intentionally omit `description`: the startup stub synthesizes one from `targetLabel` and `name`, then inherits the target command's real description after loading. Object form is used only when command-specific metadata is needed.
 
 Requirements:
 
 - `version` is required and must equal `1`.
 - `packages` is required and must be an object keyed by package name or manifest alias. The wrapper keeps `$schema` and `version` separate from dynamic package keys and leaves room for future file-level metadata.
-- Each package value requires a `commands` array.
-- Each command requires only a non-empty `name`; `description` is optional.
+- Each package value requires a `commands` array whose items may be command-name strings or command objects.
+- A string item is equivalent to `{ "name": item }` and is normalized before merge/conflict processing.
+- An object item requires only a non-empty `name`; `description` is optional.
 - Package keys must resolve through the built-in manifest.
 - `targetLabel` is optional, cosmetic, and applies to every command in its package group; it defaults to the resolved manifest package name.
 - Command names omit the leading `/`.
@@ -185,6 +189,40 @@ Requirements:
 - The file size is limited to 64 KiB.
 - Missing configuration is valid and means “built-ins only.”
 - Configuration changes take effect on `/reload` or restart. No watcher is added.
+
+The shipped JSON Schema must express the command-item union directly:
+
+```json
+{
+  "commands": {
+    "type": "array",
+    "items": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 240
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+```
 
 ### Security Boundary
 
@@ -198,14 +236,15 @@ Built-in declarations load first; valid user declarations overlay them.
 
 1. The identity key is `(resolved package name, command name)`.
 2. An exact user command match may override `description` when it provides one; omitting it preserves the built-in value. A package-group `targetLabel` overrides the display label for every command in that group.
-3. Duplicate identical declarations collapse to one proxy.
-4. The same command name mapped to different packages is a conflict.
-5. Conflicted command names register no proxy; other valid declarations continue.
-6. Unknown packages, malformed names, explicitly empty/invalid descriptions, oversized files, unsupported versions, and unknown fields produce diagnostics and are skipped.
-7. Invalid entries must not crash Pi startup.
-8. Diagnostics are written to stderr immediately and shown once through `ctx.ui.notify` at `session_start` when UI is available.
-9. Validation must be deterministic; declaration ordering must not change conflict outcomes.
-10. `manifest.json` itself is validated with the same command-definition rules during tests and package startup.
+3. After string normalization, duplicate declarations for the same package/command collapse when descriptions are equal or only one supplies a description; the supplied description wins.
+4. Two user objects for the same package/command with different non-empty descriptions are a conflict rather than order-dependent last-write-wins.
+5. The same command name mapped to different packages is a conflict.
+6. Conflicted command names register no proxy; other valid declarations continue.
+7. Unknown packages, malformed string/object names, explicitly empty/invalid descriptions, oversized files, unsupported versions, and unknown fields produce diagnostics and are skipped.
+8. Invalid entries must not crash Pi startup.
+9. Diagnostics are written to stderr immediately and shown once through `ctx.ui.notify` at `session_start` when UI is available.
+10. Validation must be deterministic; declaration ordering must not change conflict outcomes.
+11. `manifest.json` itself is validated with the same normalized command-definition rules during tests and package startup.
 
 A JSON Schema, `lazy-loader.schema.json`, must ship with the package and cover the user file. TypeScript validation remains authoritative at runtime.
 
@@ -226,9 +265,11 @@ interface ManifestEntry {
   commands?: CommandProxyDeclaration[];
 }
 
+type UserCommandDeclaration = string | CommandProxyDeclaration;
+
 interface UserPackageCommandConfig {
   targetLabel?: string;
-  commands: CommandProxyDeclaration[];
+  commands: UserCommandDeclaration[];
 }
 
 interface UserCommandConfig {
@@ -246,6 +287,7 @@ Add a focused module, for example `src/command-config.ts`, responsible only for:
 - reading the optional global file;
 - enforcing size and JSON shape;
 - resolving each `packages` object key through `findManifestEntry`;
+- normalizing string command entries to `{ name }`;
 - flattening validated package groups into merged runtime command definitions;
 - merging built-in and user declarations;
 - returning valid definitions plus diagnostics.
@@ -428,7 +470,7 @@ Write failing tests for:
 
 - manifest command validation, including omitted-description fallback;
 - missing/malformed/oversized user config;
-- package-keyed group validation and package alias resolution;
+- package-keyed group validation, string/object/mixed command arrays, and package alias resolution;
 - deterministic merge and conflict handling;
 - all commands reserved before first factory load;
 - completion behavior before and after load;
@@ -452,7 +494,7 @@ Gate: a cold TUI session invokes each proxy against the real package. `/mcp` and
 
 Ship `lazy-loader.schema.json` and read `lazy-loader.json` from the agent directory. Add one synthetic user command declaration for an existing manifest package in isolated tests.
 
-Gate: missing config, valid config, malformed config, conflict config, and symlinked agent directory all behave according to the merge rules.
+Gate: missing config, string-only, object-only, mixed, malformed, and conflict configs plus a symlinked agent directory all behave according to the normalization and merge rules.
 
 ### Stage 4 — Provenance and Status UX
 
@@ -469,8 +511,8 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 | Area | Required checks |
 |---|---|
 | Manifest | valid command arrays; omitted descriptions; invalid names/descriptions; duplicate keys; unknown fields |
-| User config | absent, valid package groups, malformed JSON, wrong version, oversized, unknown package key, duplicate aliases, conflict |
-| Merge | built-in only; package-group addition; omitted description preserves built-in; group target-label override; description override; deterministic conflict skip |
+| User config | absent; string-only, object-only, and mixed arrays; malformed JSON; wrong version; oversized; unknown package key; duplicate aliases; conflicts |
+| Merge | built-in only; string normalization; shorthand/object dedupe; omitted description preserves built-in; group target-label override; description override; deterministic conflict skip |
 | Registration | eager target skips proxy; deferred target registers proxy; all package commands reserved first |
 | Loading | one factory for concurrent commands; all target handlers captured; unrelated registrations forwarded |
 | Invocation | first call uses captured handler; exact args/context; async return; subsequent call uses forwarded real handler; unchanged loader-seam error |
@@ -492,7 +534,7 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 2. `/token-burden` uses the generic path and all existing proofs still pass.
 3. `/mcp`, `/pi-mcp`, and `/mcp-auth` work before manual `/lazy add`.
 4. One MCP command loads the package once and captures all declared MCP commands.
-5. User configuration can add or override command metadata for existing manifest packages.
+5. User configuration accepts string shorthand and object declarations in the same command array, and can add or override command metadata for existing manifest packages.
 6. Invalid user configuration fails softly with actionable diagnostics.
 7. Pre-load Tab completion never imports a deferred package.
 8. Post-load completion comes from the forwarded real definition; description follows target → declaration → synthesized precedence.
