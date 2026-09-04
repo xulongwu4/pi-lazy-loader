@@ -196,6 +196,7 @@ Release history:
 | `1052dbd` / `v0.1.0` | Workflow deferral and Fabric isolation |
 | `d1351be` / `v0.1.1` | Optional peers; no duplicate Pi runtime installation |
 | `a9f5ed3` | Managed-release documentation |
+| `5572202` / `v0.2.0` | Deterministic `/token-burden` command proxy |
 
 The exact historical Vertex retry issue was updated with a current 0.84.4 repro and tested remedy: <https://github.com/earendil-works/pi/issues/3218#issuecomment-5541622435>.
 

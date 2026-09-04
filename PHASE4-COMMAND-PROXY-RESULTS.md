@@ -61,6 +61,30 @@ lazy:  6.83, 5.36, 6.43, 7.82, 6.12, 4.98
 - Minimum improvement: **1.17 s**
 - Median improvement: approximately **1.59 s**
 
+## Release and Production Proof
+
+- Release: `v0.2.0` (`5572202`)
+- Installed source: `git:github.com/xulongwu4/pi-lazy-loader@v0.2.0`
+- Managed dependencies: `jiti` only; zero duplicate Pi peers
+- Production tmux invocation of `/token-burden`: **PASS**
+- Production startup runs: **5.05 s, 4.86 s, 5.28 s**
+- `/lazy list` reports token-burden, workflows, MCP, and web as deferred
+
+Pre-install settings backup:
+
+```text
+/home/oulongwu/.pi/agent/settings.json.phase4-command-backup-20260904-110550
+```
+
+Atomic rollback:
+
+```bash
+target="$(readlink -f ~/.pi/agent/settings.json)"
+cp -p ~/.pi/agent/settings.json.phase4-command-backup-20260904-110550 "${target}.restore"
+mv -f "${target}.restore" "$target"
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.1.1
+```
+
 ## Scope
 
 Only `/token-burden` is proxied. `pi-goal` and other command/ambient extensions remain eager until separately measured and proven. No profile engine or intent heuristic was added.
