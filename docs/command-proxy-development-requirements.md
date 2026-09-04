@@ -33,7 +33,7 @@ A second UX issue is attribution. Pi correctly reports the proxy command's canon
 - Do not allow user configuration to introduce packages absent from the built-in manifest in v0.3.0.
 - Do not spoof or mutate Pi's canonical `sourceInfo`.
 - Do not patch `ExtensionRunner` internals.
-- Do not unregister or replace commands dynamically.
+- Do not mutate Pi command maps or unregister commands through internal APIs. The only supported replacement is the target package's normal `registerCommand` call forwarded through the same public `ExtensionAPI`.
 - Do not load a package while the user merely requests argument completions.
 - Do not proxy dynamically generated MCP prompt commands before the adapter loads.
 - Do not add project-local custom configuration that bypasses Pi's project-trust boundary.
@@ -41,7 +41,8 @@ A second UX issue is attribution. Pi correctly reports the proxy command's canon
 
 ## Terminology
 
-- **Proxy command:** Lightweight command registered eagerly by `pi-lazy-loader`.
+- **Command proxy:** The complete first-use mechanism: an eager startup stub followed by a target-definition handoff.
+- **Startup stub:** Lightweight command initially registered by `pi-lazy-loader`; it owns only the first invocation.
 - **Target package:** Deferred package containing the real command implementation.
 - **Target command:** Real `registerCommand` definition captured during target loading.
 - **Built-in declaration:** Command metadata shipped in `manifest.json`.
@@ -64,7 +65,35 @@ It also contains one hardcoded registration in `index.ts`:
 /token-burden → pi-token-burden → token-burden
 ```
 
-This command has passed deterministic tests, isolated TUI validation, packed-install TUI validation, and production TUI validation. The generic implementation must retain those guarantees.
+This command has passed deterministic tests, isolated TUI validation, packed-install TUI validation, and production TUI validation. `v0.2.1` additionally proves that the target's real description and completions replace the synthesized stub metadata after first load. The generic implementation must retain those guarantees.
+
+## Command Definition Handoff
+
+A command proxy has three observable states:
+
+```text
+startup
+  /command → startup stub
+  description → declared lazy description + target attribution
+
+first invocation (stub handler already on the call stack)
+  → load target package
+  → capture target registerCommand(name, realOptions)
+  → forward registerCommand through the same pi-lazy-loader ExtensionAPI
+  → Pi's extension.commands.set(name, ...) replaces the stub entry
+  → call the captured real handler for this in-flight invocation
+
+subsequent invocation
+  /command → forwarded real command definition directly
+  description/completions/handler → target options
+  sourceInfo → pi-lazy-loader (unchanged canonical registrar)
+```
+
+The first invocation cannot redispatch the slash command because command parsing has already completed. It must call the captured real handler. Future invocations resolve the updated command map and bypass the stub handler entirely.
+
+Forwarding through the same `ExtensionAPI` is load-bearing: Pi performs a map replacement within one extension instead of resolving two extension-owned commands as `/command:1` and `/command:2`.
+
+If loading fails or the target never registers the declared command, no replacement occurs; the startup stub remains available so a later invocation can report or retry the failure.
 
 ## Configuration Model
 
@@ -245,7 +274,7 @@ Each registered command must:
 3. load the target package on invocation;
 4. report load failure clearly;
 5. invoke the captured target handler with original arguments and context;
-6. forward the captured target registration so its real metadata and handler replace the startup stub in the same extension command map;
+6. forward the captured target registration through the same public `ExtensionAPI`, so Pi replaces the startup stub with the target definition in the existing command-map slot;
 7. record proxy/target/package details when diagnostic reporting is enabled.
 
 ### FR-5: Target Registration Capture
@@ -256,7 +285,7 @@ The existing late-factory `ExtensionAPI` proxy must intercept `registerCommand(n
 - Otherwise forward registration to Pi unchanged.
 - Captured definitions are isolated by package and command name.
 - Multiple commands from one factory are captured independently.
-- A second registration for the same reserved key is an explicit error; it must not silently replace the first definition.
+- Repeated target registrations for the same reserved key preserve Pi's normal last-write-wins behavior: update the captured definition and forward the latest options into the same command-map slot. They must not create numeric suffixes.
 - Target commands must register synchronously or within the awaited extension factory. Registration after package load completion is unsupported and diagnosed.
 
 ### FR-6: Invocation Semantics
@@ -274,7 +303,7 @@ Concurrent first invocations of different proxies belonging to the same package 
 
 ### FR-7: Argument Completions
 
-The startup stub may expose `getArgumentCompletions()` that returns `null`; requesting completion must not load the package. When the target registration is forwarded, Pi replaces the stub options with the real command options. Post-load completions therefore come directly from the target's `getArgumentCompletions` without a loader completion seam.
+The startup stub may expose `getArgumentCompletions()` that returns `null`; requesting completion must not load the package. When the target registration is forwarded, Pi replaces the stub options with the real command options. Post-load completions therefore come directly from the target's `getArgumentCompletions` without a loader completion seam. Tests must prove both the pre-load `null` result and post-load target result.
 
 ### FR-8: MCP Commands
 
@@ -312,17 +341,20 @@ Pi's public command API excludes `sourceInfo` from caller-supplied options. Ther
 sourceInfo → pi-lazy-loader
 ```
 
-The loader must not spoof it. Proxy descriptions must show delegated provenance in a consistent format:
+The loader must not spoof it. Description handoff has two formats:
 
 ```text
-Show MCP server status [target: pi-mcp-adapter; proxy: pi-lazy-loader]
+before load: Show MCP server status [lazy target: pi-mcp-adapter; proxy: pi-lazy-loader]
+after load:  <real target description> [target: pi-mcp-adapter; via pi-lazy-loader]
 ```
+
+When forwarding the real options in v0.3.0, preserve the target description as the base text and append delegated attribution. If the target omits a description, use the validated declared description as the base. All other target options, including completion behavior and handler, pass through unchanged.
 
 Requirements:
 
 - before load, target label is visible in the synthesized command description;
-- after load, the target's real description and completions are visible;
-- proxy ownership is not hidden;
+- after load, the target's real description (or declared fallback), completions, and delegated attribution are visible;
+- proxy ownership is not hidden before or after handoff;
 - labels come from validated data, never paths or executable values;
 - eager commands retain their genuine target-package `sourceInfo` because no proxy is registered;
 - `/lazy list` shows each proxy as `/command → target-package`.
@@ -338,7 +370,7 @@ Diagnostics must distinguish:
 - target package missing;
 - target package failed to load;
 - package loaded but did not register the declared command (command proxy fails; the successfully loaded package is not reloaded);
-- duplicate target registration;
+- repeated target registration (diagnostic only; latest definition remains authoritative);
 - target handler failure;
 - unsupported late registration;
 - missing UI for a UI-only command.
@@ -400,7 +432,7 @@ Do not alter runtime registration until these tests fail for the expected reason
 
 Implement command-config parsing and the generic registrar. Move `/token-burden` from hardcoded code to `manifest.json`.
 
-Gate: existing unit checks and three prior TUI proof shapes (isolated checkout, packed install, production-style config) still open the real overlay. No `/token-burden:1` appears.
+Gate: existing unit checks and three prior TUI proof shapes (isolated checkout, packed install, production-style config) still open the real overlay. Metadata inspection proves the synthesized description before load and the target description/completions after load. No `/token-burden:1` appears.
 
 ### Stage 2 — MCP Built-ins
 
@@ -433,11 +465,11 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 | Merge | built-in only; package-group addition; group target-label override; command description override; deterministic conflict skip |
 | Registration | eager target skips proxy; deferred target registers proxy; all package commands reserved first |
 | Loading | one factory for concurrent commands; all target handlers captured; unrelated registrations forwarded |
-| Invocation | exact args/context; async return; repeated invocation; unchanged loader-seam error |
+| Invocation | first call uses captured handler; exact args/context; async return; subsequent call uses forwarded real handler; unchanged loader-seam error |
 | Completions | no pre-load import; null before load; exact target result after load |
 | Collision | target registration replaces the same-map stub; no `:1` suffix; duplicate target registration diagnosed |
 | Lifecycle | genuine events replayed; MCP and token-burden state initialized |
-| Provenance | sourceInfo remains loader; target and proxy visible in description; eager source genuine |
+| Provenance | sourceInfo remains loader; startup and post-load descriptions show target/proxy; target description is preserved; eager source genuine |
 | MCP | `/mcp`, `/pi-mcp`, `/mcp-auth`; generated prompt commands appear after first load |
 | Token burden | genuine overlay; first and repeated calls; no hardcoded registrar remains |
 | Packaging | eight-plus-schema runtime files only; no duplicate Pi peers; clean install smoke |
