@@ -7,16 +7,17 @@
 The implementation is released at:
 
 - Repository: <https://github.com/xulongwu4/pi-lazy-loader>
-- Installed release: `v0.1.1`
+- Installed release: `v0.2.0`
 - Pi package source: `git:github.com/xulongwu4/pi-lazy-loader@v0.1.1`
 
-The validated configuration defers three packages:
+The validated v0.2.0 configuration defers four packages:
 
 - `pi-web-access`
 - `pi-mcp-adapter`
 - `@quintinshaw/pi-dynamic-workflows`
+- `pi-token-burden`
 
-`pi-fabric`, `@tintinweb/pi-subagents`, provider extensions, and extensions with required ambient behavior remain eager. Phase 4.0 was attempted and stopped with a verified NO-GO: the model bypassed the prompt-visible proxy and performed the work directly through Fabric. No Phase 4 runtime code shipped.
+`pi-fabric`, `@tintinweb/pi-subagents`, provider extensions, and extensions with required ambient behavior remain eager. Phase 4.0 tool proxy stopped with a verified NO-GO because the model bypassed `lazy_agent`. Phase 4.2 succeeded independently: deterministic slash-command dispatch allows `/token-burden` to load and invoke the real captured handler.
 
 ## Current Production Configuration
 
@@ -25,9 +26,10 @@ Pi settings keep package skills, prompts, and themes eager while filtering exten
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader@v0.1.1",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.2.0",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
+    { "source": "npm:pi-token-burden", "extensions": [] },
     { "source": "npm:pi-mcp-adapter", "extensions": [] },
     { "source": "npm:pi-web-access", "extensions": [] }
   ]
@@ -235,14 +237,15 @@ Unknown packages, missing package roots, unresolved entries, non-function defaul
 | LLM wiki | Eager | Automatic recall and observation are ambient behavior |
 | Subagents | Eager | Lazy discovery produced verified behavioral bypasses |
 | Provider extensions | Eager | Models must exist before model selection/tool use |
-| Command-only/ambient extensions | Eager | Their commands or background hooks must exist before intent can trigger loading |
+| Command-only extensions | Eager unless explicitly proxied | `/token-burden` is deferred behind a permanent deterministic command proxy |
+| Ambient extensions | Eager | Background hooks must exist before intent can trigger loading |
 | Web, MCP, workflows | Deferred | Explicit capability, verified discovery, safe lifecycle behavior |
 
 ## Phase 4 Design
 
 ### Status
 
-**Attempted; stopped at Phase 4.0.** The entry criteria were met by the subagent-discovery failure, but the live proxy acceptance test triggered a documented stop condition. See [`../PHASE4-RESULTS.md`](../PHASE4-RESULTS.md). Phases 4.1–4.3 remain cancelled unless Pi/Fabric tool-selection behavior materially changes.
+**Partially implemented.** Phase 4.0 tool proxy stopped at its documented NO-GO; see [`../PHASE4-RESULTS.md`](../PHASE4-RESULTS.md). Phase 4.2 command proxy succeeded independently because slash commands do not depend on model tool selection; see [`../PHASE4-COMMAND-PROXY-RESULTS.md`](../PHASE4-COMMAND-PROXY-RESULTS.md). Phase 4.1 remains cancelled and Phase 4.3 remains unnecessary.
 
 ### Entry Criteria
 
@@ -379,7 +382,7 @@ Proceed only if Phase 4.0 passes. Add focused checks for:
 
 #### Phase 4.2 — Command Proxy Spike
 
-Select one measured command-only extension, likely `pi-token-burden` or `pi-goal`. Implement one command proxy and require real command output. Stop if the target relies on unreplayable startup behavior.
+Implemented for `pi-token-burden`. The permanent `/token-burden` proxy reserves the target registration, loads the package on first use, suppresses the duplicate target registration, and invokes the captured handler with the original argument string and genuine command context. A tmux acceptance test opened the real Token Burden overlay.
 
 #### Phase 4.3 — Project Configuration
 
@@ -426,4 +429,4 @@ Stop Phase 4 and keep the package eager if any of these remain unresolved after 
 
 ## Recommended Next Action
 
-Keep `@tintinweb/pi-subagents` eager. The Phase 4.0 `lazy_agent` spike failed because the parent bypassed the active proxy and used Fabric directly. Do not resume proxy, command, or profile work unless a future Pi/Fabric tool-selection change makes the unknown-nonce acceptance test pass.
+Keep `@tintinweb/pi-subagents` eager; do not resume tool-proxy work unless the unknown-nonce acceptance test passes after a future Pi/Fabric change. Retain the successful `/token-burden` command proxy. Native settings remain sufficient, so no profile engine is needed.

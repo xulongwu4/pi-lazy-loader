@@ -1,6 +1,6 @@
 # Phase 4 — Implementation Result
 
-**Verdict: NO-GO at Phase 4.0. No Phase 4 runtime code shipped.**
+**Phase 4.0 tool-proxy verdict: NO-GO.** This result applies to the model-selected `lazy_agent` proxy. Phase 4.2 was later resumed independently because slash-command dispatch is deterministic; see [`PHASE4-COMMAND-PROXY-RESULTS.md`](PHASE4-COMMAND-PROXY-RESULTS.md).
 
 ## Scope Attempted
 
@@ -55,7 +55,7 @@ All Phase 4 runtime and test-spike changes were removed. The released Phase 3/2.
 - Production settings still keep `@tintinweb/pi-subagents` eager.
 - Production Fabric configuration remains `keepVisible: ["fabric_exec", "lazy_load"]`.
 
-Phases 4.1 (hardening), 4.2 (command proxy), 4.3 (profiles), and the Phase 4 release were cancelled because they depended on Phase 4.0 passing.
+Phase 4.1 tool-proxy hardening remained cancelled. Phase 4.2 command proxy was later treated as an independent seam and passed; Phase 4.3 profiles remains unnecessary.
 
 ## Reconsideration Trigger
 

@@ -1,6 +1,6 @@
 # pi-lazy-loader
 
-Deferred on-demand extension loader for Pi coding agent. It can load ten profiled packages mid-session without `/reload`; the validated Fabric-compatible configuration currently defers web access, MCP, and dynamic workflows.
+Deferred on-demand extension loader for Pi coding agent. It can load ten profiled packages mid-session without `/reload`; the validated Fabric-compatible configuration currently defers web access, MCP, dynamic workflows, and the token-burden command.
 
 ## Startup Overhead & Performance Impact
 
@@ -21,24 +21,25 @@ The ten packages below account for **80.8% (4.257 s)** of that overhead:
 | 9 | `npm:pi-web-access` | **0.100 s** | Web search, URL fetching, repo cloning, and PDF extraction |
 | 10 | `git:github.com/xulongwu4/pi-quotas` | **0.100 s** | API quota and token usage monitoring and status |
 
-The table is the Phase 0 opportunity map, not a recommendation to defer every entry. Phase 2.6 validated three packages: `pi-web-access`, `pi-mcp-adapter`, and `@quintinshaw/pi-dynamic-workflows`. Interleaved A/B testing measured at least **0.71 s** improvement from workflows alone; the earlier web/MCP trial improved its fresh-start minimum by **0.52 s**.
+The table is the Phase 0 opportunity map, not a recommendation to defer every entry. Phase 2.6 validated `pi-web-access`, `pi-mcp-adapter`, and `@quintinshaw/pi-dynamic-workflows`. Phase 4.2 additionally validated the deterministic `/token-burden` command proxy. Interleaved A/B testing measured at least **0.71 s** improvement from workflows alone; the earlier web/MCP trial improved its fresh-start minimum by **0.52 s**.
 
 ---
 
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.1.1
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.2.0
 ```
 
-Keep skills, prompts, and themes eager while filtering only the three validated extension entries in `~/.pi/agent/settings.json`:
+Keep skills, prompts, and themes eager while filtering only the four validated extension entries in `~/.pi/agent/settings.json`:
 
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader@v0.1.1",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.2.0",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
+    { "source": "npm:pi-token-burden", "extensions": [] },
     { "source": "npm:pi-mcp-adapter", "extensions": [] },
     { "source": "npm:pi-web-access", "extensions": [] }
   ]
@@ -83,7 +84,7 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 
 Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep `lazy_load` visible alongside `fabric_exec`; after each load the loader refreshes Fabric's catalog and restores that two-tool active set, preventing same-turn policy leaks.
 
-The Phase 2.6 configuration therefore defers `pi-web-access`, `pi-mcp-adapter`, and `@quintinshaw/pi-dynamic-workflows`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
+The v0.2.0 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
 
 ### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
@@ -94,6 +95,7 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
 
 ### Slash Commands
 
+- `/token-burden`: Permanent lightweight proxy registered only when `pi-token-burden` is filtered. On first use it loads the real package, captures its command handler, and opens the genuine Token Burden UI.
 - `/lazy list`: Show status (`deferred`, `loading`, `loaded`, `failed`), measured startup cost, and capabilities for all 10 packages.
 - `/lazy add <package>`: Dynamically load a package extension into the current session.
   - Idempotent: Subsequent calls return immediately.
@@ -123,6 +125,8 @@ Run the verification suite:
 ```bash
 bun checks/run-checks.ts
 ```
+
+Run `bun checks/phase4-command-checks.ts` for command-proxy capture, concurrency, repeat-call, forwarding, and error checks.
 
 The suite covers:
 1. **File/Directory Entry Resolution**: Validates resolution of single files, directory conventions (`llm-wiki/index.ts`), and multi-file packages (`pi-quotas` 6 entries), plus error handling.

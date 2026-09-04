@@ -85,6 +85,8 @@ export class LazyLoader {
     resourcesDiscover: null,
   };
   private agentDir: string;
+  private reservedCommands = new Map<string, Set<string>>();
+  private capturedCommands = new Map<string, any>();
 
   constructor(pi: any, agentDir?: string, syncSettings = true) {
     this.pi = pi;
@@ -144,6 +146,22 @@ export class LazyLoader {
 
   getAllStates(): PackageState[] {
     return Array.from(this.states.values());
+  }
+
+  reserveCommand(identifier: string, commandName: string): void {
+    const manifest = findManifestEntry(identifier);
+    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
+    const names = this.reservedCommands.get(manifest.name) ?? new Set<string>();
+    names.add(commandName);
+    this.reservedCommands.set(manifest.name, names);
+  }
+
+  async invokeCapturedCommand(identifier: string, commandName: string, args: string, ctx: any): Promise<any> {
+    const manifest = findManifestEntry(identifier);
+    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
+    const command = this.capturedCommands.get(`${manifest.name}:${commandName}`);
+    if (!command?.handler) throw new Error(`Package "${manifest.name}" did not register reserved command "${commandName}"`);
+    return await command.handler(args, ctx);
   }
 
   getPackageState(identifier: string): PackageState | undefined {
@@ -216,7 +234,7 @@ export class LazyLoader {
 
         const newlyLoaded: string[] = [];
         for (const entryPath of entries) {
-          await this.loadSingleEntry(entryPath);
+          await this.loadSingleEntry(entryPath, manifest.name);
           newlyLoaded.push(entryPath);
         }
 
@@ -262,7 +280,7 @@ export class LazyLoader {
   /**
    * Load and initialize a single extension entry file with jiti and lifecycle replay.
    */
-  private async loadSingleEntry(entryPath: string): Promise<void> {
+  private async loadSingleEntry(entryPath: string, packageName: string): Promise<void> {
     const jiti = createJiti(import.meta.url, {
       moduleCache: false,
       tryNative: false,
@@ -279,6 +297,15 @@ export class LazyLoader {
 
     const proxy = new Proxy(this.pi, {
       get: (target: any, prop: string | symbol, receiver: any) => {
+        if (prop === "registerCommand") {
+          return (name: string, command: any) => {
+            if (this.reservedCommands.get(packageName)?.has(name)) {
+              this.capturedCommands.set(`${packageName}:${name}`, command);
+              return;
+            }
+            return target.registerCommand(name, command);
+          };
+        }
         if (prop === "on") {
           return (event: string, handler: (...args: any[]) => any) => {
             capturedHandlers.push({ event, handler });

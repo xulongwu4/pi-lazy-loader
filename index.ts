@@ -97,7 +97,35 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     });
   }
 
-  // 2. Register slash command: /lazy (list | add <pkg> | pin <pkg>)
+  // 2. Register a deterministic command proxy only when token-burden is deferred.
+  if (loader.getPackageState("pi-token-burden")?.status === "deferred") {
+    loader.reserveCommand("pi-token-burden", "token-burden");
+    pi.registerCommand("token-burden", {
+      description: "Load pi-token-burden on first use and show its real token budget UI",
+      handler: async (args, ctx) => {
+        const loaded = await loader.loadPackage("pi-token-burden");
+        if (!loaded.success) {
+          const message = `Failed to load pi-token-burden: ${loaded.error}`;
+          if (ctx.hasUI) ctx.ui.notify(message, "error");
+          else console.error(message);
+          return;
+        }
+        if (report) {
+          report.steps.push({ step: "proxy_call", proxy: "/token-burden", target: "token-burden" });
+          saveReport();
+        }
+        try {
+          return await loader.invokeCapturedCommand("pi-token-burden", "token-burden", args, ctx);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (ctx.hasUI) ctx.ui.notify(`token-burden failed: ${message}`, "error");
+          else console.error(`token-burden failed: ${message}`);
+        }
+      },
+    });
+  }
+
+  // 3. Register slash command: /lazy (list | add <pkg> | pin <pkg>)
   pi.registerCommand("lazy", {
     description: "Manage lazy-loaded extensions: /lazy list, /lazy add <pkg>, /lazy pin <pkg>",
     getArgumentCompletions(prefix: string) {
