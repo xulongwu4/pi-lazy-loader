@@ -59,6 +59,12 @@ after:  Show token budget breakdown and manage skills
 
 Both snapshots contained exactly one unsuffixed `token-burden` command. Canonical `sourceInfo` remained `pi-lazy-loader`, because Pi derives provenance from the registering `ExtensionAPI`; only the target's real command options are inherited.
 
+The managed `v0.2.1` production install reproduced the same transition with source path `/home/oulongwu/.pi/agent/git/github.com/xulongwu4/pi-lazy-loader/index.ts` and opened the genuine overlay. Its pre-upgrade rollback backup is:
+
+```text
+/home/oulongwu/.pi/agent/settings.json.command-description-backup-20260904-114748
+```
+
 ## Performance
 
 Alternating-order A/B startup measurements:
@@ -76,7 +82,7 @@ lazy:  6.83, 5.36, 6.43, 7.82, 6.12, 4.98
 ## Release and Production Proof
 
 - Initial command-proxy release: `v0.2.0` (`5572202`)
-- Description-handoff release: `v0.2.1`
+- Description-handoff release: `v0.2.1` (`5be632a`)
 - Installed source: `git:github.com/xulongwu4/pi-lazy-loader@v0.2.0`
 - Managed dependencies: `jiti` only; zero duplicate Pi peers
 - Production tmux invocation of `/token-burden`: **PASS**
