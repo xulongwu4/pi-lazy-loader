@@ -1,6 +1,6 @@
 {
   "name": "pi-lazy-loader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "On-demand extension loader for Pi coding agent",
   "repository": "github:xulongwu4/pi-lazy-loader",
   "homepage": "https://github.com/xulongwu4/pi-lazy-loader#readme",
@@ -34,5 +34,12 @@
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-agent-core": { "optional": true },
+    "@earendil-works/pi-ai": { "optional": true },
+    "@earendil-works/pi-coding-agent": { "optional": true },
+    "@earendil-works/pi-tui": { "optional": true },
+    "typebox": { "optional": true }
   }
 }
