@@ -1,0 +1,10 @@
+{
+  "name": "pi-lazy-loader-spike",
+  "version": "0.0.0-spike",
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,72 @@
+[
+  {
+    "name": "pi-fabric",
+    "source": "npm:pi-fabric",
+    "locator": "npm:pi-fabric",
+    "cost": 1.102,
+    "capability": "Programmable tool and agent runtime (fabric_exec, mcporter, actors)"
+  },
+  {
+    "name": "@zosmaai/pi-llm-wiki",
+    "source": "npm:@zosmaai/pi-llm-wiki",
+    "locator": "npm:@zosmaai/pi-llm-wiki",
+    "cost": 0.702,
+    "capability": "Self-maintaining markdown LLM wiki, search, and knowledge vault"
+  },
+  {
+    "name": "@tintinweb/pi-subagents",
+    "source": "npm:@tintinweb/pi-subagents",
+    "locator": "npm:@tintinweb/pi-subagents",
+    "cost": 0.601,
+    "capability": "Sub-agents and workflow orchestration with parallel execution"
+  },
+  {
+    "name": "@quintinshaw/pi-dynamic-workflows",
+    "source": "npm:@quintinshaw/pi-dynamic-workflows",
+    "locator": "npm:@quintinshaw/pi-dynamic-workflows",
+    "cost": 0.501,
+    "capability": "Dynamic workflows fan-out and deep-research execution"
+  },
+  {
+    "name": "@narumitw/pi-goal",
+    "source": "npm:@narumitw/pi-goal",
+    "locator": "npm:@narumitw/pi-goal",
+    "cost": 0.401,
+    "capability": "Autonomous single-objective goal completion (/goal)"
+  },
+  {
+    "name": "pi-token-burden",
+    "source": "npm:pi-token-burden",
+    "locator": "npm:pi-token-burden",
+    "cost": 0.300,
+    "capability": "Token-budget breakdown of system prompt (/token-burden)"
+  },
+  {
+    "name": "pi-antigravity",
+    "source": "npm:pi-antigravity",
+    "locator": "npm:pi-antigravity",
+    "cost": 0.250,
+    "capability": "Cloud Code Assist / Antigravity Google OAuth provider"
+  },
+  {
+    "name": "pi-mcp-adapter",
+    "source": "npm:pi-mcp-adapter",
+    "locator": "npm:pi-mcp-adapter",
+    "cost": 0.200,
+    "capability": "Model Context Protocol (MCP) server adapter and tools"
+  },
+  {
+    "name": "pi-web-access",
+    "source": "npm:pi-web-access",
+    "locator": "npm:pi-web-access",
+    "cost": 0.100,
+    "capability": "Web search, URL fetching, repo cloning, and PDF extraction"
+  },
+  {
+    "name": "pi-quotas",
+    "source": "git:github.com/xulongwu4/pi-quotas",
+    "locator": "git:github.com/xulongwu4/pi-quotas",
+    "cost": 0.100,
+    "capability": "API quota and token usage monitoring and status"
+  }
+]
