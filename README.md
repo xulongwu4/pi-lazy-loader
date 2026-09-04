@@ -28,7 +28,7 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.1.1
 ```
 
 Keep skills, prompts, and themes eager while filtering only the three validated extension entries in `~/.pi/agent/settings.json`:
@@ -36,7 +36,7 @@ Keep skills, prompts, and themes eager while filtering only the three validated 
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.1.1",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
     { "source": "npm:pi-mcp-adapter", "extensions": [] },

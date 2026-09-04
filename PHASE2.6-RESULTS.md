@@ -60,6 +60,19 @@ These figures compare only dynamic workflows eager vs deferred under otherwise i
 - Workflow cold discovery and execution: passed.
 - Same-turn Fabric isolation after dynamic registration: passed.
 
+## Release
+
+- Public repository: https://github.com/xulongwu4/pi-lazy-loader
+- Installed package source: `git:github.com/xulongwu4/pi-lazy-loader@v0.1.1`
+- `v0.1.1` makes Pi peer dependencies optional; the managed install contains only `jiti`, not a duplicate Pi runtime.
+- The absolute checkout extension path was removed from settings after the tagged package passed a fresh-start smoke test.
+
+## Upstream Vertex retry report
+
+The exact historical issue was updated rather than duplicated: https://github.com/earendil-works/pi/issues/3218#issuecomment-5541622435
+
+The comment includes the 0.84.4 deterministic retry-classification repro, 12/12 healthy ADC refresh controls, both failing agent transports, and the tested `request to .* failed, reason:` pattern.
+
 ## Rollback
 
 Restore both settings atomically:
