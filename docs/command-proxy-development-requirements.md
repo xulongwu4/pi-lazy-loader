@@ -9,7 +9,7 @@
 
 Pi must know slash commands before it dispatches user input. If a package is configured with `"extensions": []`, its extension factory does not run at startup and its commands are absent. The model cannot recover an unknown slash command by calling `lazy_load` because command dispatch happens before the model runs.
 
-`v0.2.0` proves that a permanent lightweight proxy can solve this problem, but `/token-burden` is hardcoded in `index.ts`. There is no structured command metadata in `manifest.json`, no user extension point, and no generic registration path. Consequently `/mcp`, `/pi-mcp`, and `/mcp-auth` are unavailable until users manually run `/lazy add pi-mcp-adapter`.
+`v0.2.1` proves that a lightweight startup stub can solve this problem and hand off to the real command definition after loading, but `/token-burden` is hardcoded in `index.ts`. There is no structured command metadata in `manifest.json`, no user extension point, and no generic registration path. Consequently `/mcp`, `/pi-mcp`, and `/mcp-auth` are unavailable until users manually run `/lazy add pi-mcp-adapter`.
 
 A second UX issue is attribution. Pi correctly reports the proxy command's canonical source as `pi-lazy-loader`, because that extension called `registerCommand`. Users also need to see the real target package behind the proxy.
 
@@ -23,7 +23,7 @@ A second UX issue is attribution. Pi correctly reports the proxy command's canon
 6. Preserve handler arguments, command context, errors, and post-load completions.
 7. Show both the target package and `pi-lazy-loader` proxy role honestly.
 8. Make `/mcp`, `/pi-mcp`, and `/mcp-auth` work from a cold session.
-9. Preserve `v0.2.0` `/token-burden` behavior without a hardcoded branch.
+9. Preserve `v0.2.1` `/token-burden` description-handoff behavior without a hardcoded branch.
 10. Add less startup cost than the packages being deferred.
 
 ## Non-Goals
@@ -51,7 +51,7 @@ A second UX issue is attribution. Pi correctly reports the proxy command's canon
 
 ## Current Baseline
 
-`v0.2.0` contains generic loader methods:
+`v0.2.1` contains generic loader methods:
 
 ```ts
 loader.reserveCommand(packageName, commandName);
@@ -245,14 +245,14 @@ Each registered command must:
 3. load the target package on invocation;
 4. report load failure clearly;
 5. invoke the captured target handler with original arguments and context;
-6. retain the permanent proxy instead of relying on duplicate-name replacement;
+6. forward the captured target registration so its real metadata and handler replace the startup stub in the same extension command map;
 7. record proxy/target/package details when diagnostic reporting is enabled.
 
 ### FR-5: Target Registration Capture
 
 The existing late-factory `ExtensionAPI` proxy must intercept `registerCommand(name, options)`.
 
-- If `(package, name)` is reserved, store the complete command options and suppress registration.
+- If `(package, name)` is reserved, store the complete command options and forward the registration to Pi, replacing the startup stub.
 - Otherwise forward registration to Pi unchanged.
 - Captured definitions are isolated by package and command name.
 - Multiple commands from one factory are captured independently.
@@ -274,25 +274,7 @@ Concurrent first invocations of different proxies belonging to the same package 
 
 ### FR-7: Argument Completions
 
-The permanent proxy must expose `getArgumentCompletions(prefix)`.
-
-Before target load:
-
-- return `null`;
-- do not load the package merely because the user pressed Tab.
-
-After target load:
-
-- if the captured command provides `getArgumentCompletions`, delegate the original prefix and return its result unchanged;
-- otherwise return `null`.
-
-Add a loader seam such as:
-
-```ts
-loader.getCapturedCommandCompletions(packageName, commandName, prefix);
-```
-
-The completion seam must not expose or mutate the complete captured command definition.
+The startup stub may expose `getArgumentCompletions()` that returns `null`; requesting completion must not load the package. When the target registration is forwarded, Pi replaces the stub options with the real command options. Post-load completions therefore come directly from the target's `getArgumentCompletions` without a loader completion seam.
 
 ### FR-8: MCP Commands
 
@@ -315,7 +297,9 @@ MCP prompt commands generated from server prompts are not declared upfront. They
 - still absent as a proxy when `pi-token-burden` is eager;
 - still available at startup when the package is deferred;
 - still opens the genuine Token Burden overlay on first use;
-- still reuses the captured handler on subsequent calls;
+- still invokes the captured handler for the in-flight first call;
+- subsequent calls use the forwarded real command definition;
+- the synthesized description is replaced by the real description and completions;
 - no duplicate `/token-burden:1` command appears.
 
 Delete the per-command branch from `index.ts` after the generic path passes its tests.
@@ -336,7 +320,8 @@ Show MCP server status [target: pi-mcp-adapter; proxy: pi-lazy-loader]
 
 Requirements:
 
-- target label is always visible in command completion/help text;
+- before load, target label is visible in the synthesized command description;
+- after load, the target's real description and completions are visible;
 - proxy ownership is not hidden;
 - labels come from validated data, never paths or executable values;
 - eager commands retain their genuine target-package `sourceInfo` because no proxy is registered;
@@ -450,7 +435,7 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 | Loading | one factory for concurrent commands; all target handlers captured; unrelated registrations forwarded |
 | Invocation | exact args/context; async return; repeated invocation; unchanged loader-seam error |
 | Completions | no pre-load import; null before load; exact target result after load |
-| Collision | target registration suppressed; no `:1` suffix; duplicate target registration diagnosed |
+| Collision | target registration replaces the same-map stub; no `:1` suffix; duplicate target registration diagnosed |
 | Lifecycle | genuine events replayed; MCP and token-burden state initialized |
 | Provenance | sourceInfo remains loader; target and proxy visible in description; eager source genuine |
 | MCP | `/mcp`, `/pi-mcp`, `/mcp-auth`; generated prompt commands appear after first load |
@@ -470,7 +455,7 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 5. User configuration can add or override command metadata for existing manifest packages.
 6. Invalid user configuration fails softly with actionable diagnostics.
 7. Pre-load Tab completion never imports a deferred package.
-8. Post-load completion delegates to the real command.
+8. Post-load description and completion come from the forwarded real command definition.
 9. Command help visibly identifies both target and proxy.
 10. Canonical `sourceInfo` remains unmodified and documented.
 11. `/lazy list` displays command proxy mappings and readiness.
@@ -500,10 +485,10 @@ Before deployment, create timestamped copies of:
 Rollback steps:
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.2.0
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.2.1
 ```
 
-Restore the settings backup atomically, then restart Pi. `pi-token-burden` can remain deferred only if `v0.2.0` is restored; `pi-mcp-adapter` may remain deferred but `/mcp` again requires `/lazy add pi-mcp-adapter` before use.
+Restore the settings backup atomically, then restart Pi. `pi-token-burden` can remain deferred when `v0.2.1` is restored; `pi-mcp-adapter` may remain deferred but `/mcp` again requires `/lazy add pi-mcp-adapter` before use.
 
 ## Upstream Provenance Requirement
 

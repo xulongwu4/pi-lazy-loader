@@ -301,7 +301,6 @@ export class LazyLoader {
           return (name: string, command: any) => {
             if (this.reservedCommands.get(packageName)?.has(name)) {
               this.capturedCommands.set(`${packageName}:${name}`, command);
-              return;
             }
             return target.registerCommand(name, command);
           };

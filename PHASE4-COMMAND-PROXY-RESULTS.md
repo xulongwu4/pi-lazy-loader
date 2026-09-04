@@ -9,10 +9,10 @@ Phase 4.0's model-selected tool proxy remains a NO-GO. Phase 4.2 is independent 
 When settings configure `pi-token-burden` with `"extensions": []`, the eager loader:
 
 1. reserves the target `token-burden` command registration;
-2. registers a permanent lightweight `/token-burden` proxy;
+2. registers a lightweight `/token-burden` startup stub with a synthesized lazy description;
 3. loads `pi-token-burden` on first invocation;
-4. captures and suppresses the target's duplicate command registration;
-5. invokes the real captured handler with the original argument string and genuine `ExtensionCommandContext`.
+4. captures and forwards the target registration, replacing the stub with the real description, completions, and handler in the same extension command map;
+5. invokes the captured real handler for the in-flight first command with the original argument string and genuine `ExtensionCommandContext`.
 
 If the package is eager, the loader does not reserve or register the proxy, avoiding collisions.
 
@@ -22,9 +22,10 @@ If the package is eager, the loader does not reserve or register the proxy, avoi
 
 - invocation before loading fails clearly;
 - concurrent first loads share one factory execution;
-- the target command registration is captured and suppressed;
+- the target command registration is captured and replaces the startup stub without a numeric suffix;
+- the real description and argument completions replace the synthesized metadata;
 - command arguments and context identity are forwarded unchanged;
-- repeated calls reuse the captured handler without reloading;
+- subsequent calls use the real registered handler without reloading;
 - target errors propagate unchanged.
 
 ## Real TUI Proof
@@ -47,6 +48,17 @@ opened the genuine bordered **Token Burden** overlay. The loader diagnostic cont
 
 The overlay was absent before command invocation, proving it came from first-use loading rather than eager registration.
 
+## Description Handoff Proof
+
+A real Pi TUI session queried `pi.getCommands()` before and after first invocation:
+
+```text
+before: [lazy] load pi-token-burden then run /token-burden
+after:  Show token budget breakdown and manage skills
+```
+
+Both snapshots contained exactly one unsuffixed `token-burden` command. Canonical `sourceInfo` remained `pi-lazy-loader`, because Pi derives provenance from the registering `ExtensionAPI`; only the target's real command options are inherited.
+
 ## Performance
 
 Alternating-order A/B startup measurements:
@@ -63,7 +75,8 @@ lazy:  6.83, 5.36, 6.43, 7.82, 6.12, 4.98
 
 ## Release and Production Proof
 
-- Release: `v0.2.0` (`5572202`)
+- Initial command-proxy release: `v0.2.0` (`5572202`)
+- Description-handoff release: `v0.2.1`
 - Installed source: `git:github.com/xulongwu4/pi-lazy-loader@v0.2.0`
 - Managed dependencies: `jiti` only; zero duplicate Pi peers
 - Production tmux invocation of `/token-burden`: **PASS**
@@ -87,4 +100,4 @@ pi install git:github.com/xulongwu4/pi-lazy-loader@v0.1.1
 
 ## Scope
 
-Only `/token-burden` is proxied. `pi-goal` and other command/ambient extensions remain eager until separately measured and proven. No profile engine or intent heuristic was added.
+Only `/token-burden` uses the startup-stub handoff. `pi-goal` and other command/ambient extensions remain eager until separately measured and proven. No profile engine or intent heuristic was added.

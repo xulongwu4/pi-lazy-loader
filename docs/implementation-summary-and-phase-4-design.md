@@ -7,10 +7,10 @@
 The implementation is released at:
 
 - Repository: <https://github.com/xulongwu4/pi-lazy-loader>
-- Installed release: `v0.2.0`
+- Installed release: `v0.2.1`
 - Pi package source: `git:github.com/xulongwu4/pi-lazy-loader@v0.1.1`
 
-The validated v0.2.0 configuration defers four packages:
+The validated v0.2.1 configuration defers four packages:
 
 - `pi-web-access`
 - `pi-mcp-adapter`
@@ -26,7 +26,7 @@ Pi settings keep package skills, prompts, and themes eager while filtering exten
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader@v0.2.0",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.2.1",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
     { "source": "npm:pi-token-burden", "extensions": [] },
@@ -324,7 +324,7 @@ registerDeferredCommand({
 });
 ```
 
-The command proxy would load the package, capture and suppress the target command registration for the same name, then invoke the captured handler with the original argument string and genuine command context. Implement this only after a specific command package passes a spike; tool and command forwarding should not be forced through one abstraction.
+The command startup stub loads the package, captures and forwards the target registration so its real description, completions, and handler replace the stub, then invokes the captured handler for the in-flight first command with the original argument string and genuine command context. Implement this only after a specific command package passes a spike; tool and command forwarding should not be forced through one abstraction.
 
 ### Profiles
 
@@ -383,7 +383,7 @@ Proceed only if Phase 4.0 passes. Add focused checks for:
 
 #### Phase 4.2 — Command Proxy Spike
 
-Implemented for `pi-token-burden`. The permanent `/token-burden` proxy reserves the target registration, loads the package on first use, suppresses the duplicate target registration, and invokes the captured handler with the original argument string and genuine command context. A tmux acceptance test opened the real Token Burden overlay.
+Implemented for `pi-token-burden`. The `/token-burden` startup stub reserves the target registration, loads the package on first use, forwards the real definition to replace the synthesized metadata, and invokes the captured handler for the in-flight first command with the original argument string and genuine command context. A tmux acceptance test opened the real Token Burden overlay.
 
 #### Phase 4.3 — Project Configuration
 
@@ -394,7 +394,7 @@ Use native project settings first. Add the minimal `deferred` file only if two r
 | Risk | Mitigation |
 |---|---|
 | Tool schema drift | Use a narrow named proxy first; avoid copying full target schemas |
-| Duplicate registration | Suppress only the captured target registration; keep the proxy permanent |
+| Duplicate registration | Forward the target through the same ExtensionAPI map so it replaces the stub without a numeric suffix |
 | Incorrect forwarding | Assert identity of signal/context and preserve update/error semantics |
 | Same-turn Fabric leak | Refresh Fabric catalog, then restore the pre-load active set |
 | Partial package load | Retain existing package-level failed state and entry diagnostics |

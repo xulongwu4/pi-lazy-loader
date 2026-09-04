@@ -21,6 +21,7 @@ writeFileSync(
     globalThis.__phase4CommandFactoryCount = (globalThis.__phase4CommandFactoryCount || 0) + 1;
     pi.registerCommand("token-burden", {
       description: "fixture command",
+      getArgumentCompletions(prefix) { return [{ value: prefix + "-real", label: "real completion" }]; },
       async handler(args, ctx) {
         globalThis.__phase4CommandArgs = [args, ctx];
         globalThis.__phase4CommandHandlerCount = (globalThis.__phase4CommandHandlerCount || 0) + 1;
@@ -44,6 +45,9 @@ const pi: any = {
 try {
   const loader = new LazyLoader(pi, root, false);
   loader.reserveCommand("pi-token-burden", "token-burden");
+  const lazyStub = { description: "[lazy] load pi-token-burden then run /token-burden", handler() {} };
+  commands.set("token-burden", lazyStub);
+  assert(commands.get("token-burden")?.description.startsWith("[lazy]"), "lazy description must be visible before load");
 
   let earlyError = "";
   try {
@@ -60,7 +64,12 @@ try {
   assert(loaded.success, loaded.error ?? "package load failed");
   assert(concurrent.success, concurrent.error ?? "concurrent package load failed");
   assert((globalThis as any).__phase4CommandFactoryCount === 1, "concurrent first calls must execute the factory once");
-  assert(!commands.has("token-burden"), "captured target command must not replace the permanent proxy");
+  const realCommand = commands.get("token-burden");
+  assert(realCommand !== lazyStub, "real command must replace the lazy stub after load");
+  assert(realCommand?.description === "fixture command", "real command description must replace the lazy description");
+  const completions = await realCommand.getArgumentCompletions("arg");
+  assert(completions[0].value === "arg-real", "real command completions must replace the stub behavior");
+  assert(!commands.has("token-burden:1"), "replacement must not create a suffixed duplicate");
 
   const ctx = { cwd: "/fixture", hasUI: true };
   const result = await loader.invokeCapturedCommand("pi-token-burden", "token-burden", "--trace", ctx);
@@ -69,8 +78,8 @@ try {
   assert(forwarded[0] === "--trace", "command arguments must be forwarded unchanged");
   assert(forwarded[1] === ctx, "command context identity must be preserved");
 
-  const repeated = await loader.invokeCapturedCommand("pi-token-burden", "token-burden", "again", ctx);
-  assert(repeated === "command-result", "repeated invocation must reuse the captured handler");
+  const repeated = await realCommand.handler("again", ctx);
+  assert(repeated === "command-result", "subsequent invocation must use the real registered handler directly");
   assert((globalThis as any).__phase4CommandFactoryCount === 1, "repeated invocation must not reload the factory");
   assert((globalThis as any).__phase4CommandHandlerCount === 2, "captured handler must run once per invocation");
 

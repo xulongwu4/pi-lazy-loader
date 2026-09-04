@@ -28,7 +28,7 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.2.0
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.2.1
 ```
 
 Keep skills, prompts, and themes eager while filtering only the four validated extension entries in `~/.pi/agent/settings.json`:
@@ -36,7 +36,7 @@ Keep skills, prompts, and themes eager while filtering only the four validated e
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader@v0.2.0",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.2.1",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
     { "source": "npm:pi-token-burden", "extensions": [] },
@@ -84,7 +84,7 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 
 Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep `lazy_load` visible alongside `fabric_exec`; after each load the loader refreshes Fabric's catalog and restores that two-tool active set, preventing same-turn policy leaks.
 
-The v0.2.0 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
+The v0.2.1 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
 
 ### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
@@ -95,7 +95,7 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
 
 ### Slash Commands
 
-- `/token-burden`: Permanent lightweight proxy registered only when `pi-token-burden` is filtered. On first use it loads the real package, captures its command handler, and opens the genuine Token Burden UI.
+- `/token-burden`: Lightweight startup stub registered only when `pi-token-burden` is filtered. Before first use it shows a synthesized lazy description. Loading captures and forwards the target registration, so the real description, completions, and handler replace the stub; the first invocation calls the captured real handler in-process.
 - `/lazy list`: Show status (`deferred`, `loading`, `loaded`, `failed`), measured startup cost, and capabilities for all 10 packages.
 - `/lazy add <package>`: Dynamically load a package extension into the current session.
   - Idempotent: Subsequent calls return immediately.
