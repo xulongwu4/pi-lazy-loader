@@ -62,6 +62,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   // 1. Eagerly capture genuine lifecycle events at startup for late replay
   pi.on("session_start", (event: any, ctx: any) => {
     loader.setSessionStart(event, ctx);
+    loader.syncConfiguredEager();
     if (report) {
       report.sessionStartCaptured = true;
       saveReport();
@@ -205,6 +206,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
           step: "before_lazy_load",
           fabricPresent: report.fabricPresentBefore,
           toolCount: toolsBefore.length,
+          activeTools: pi.getActiveTools?.() ?? [],
         });
         saveReport();
       }
@@ -228,6 +230,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
           newTools: report.newTools,
           loadMs: result.loadMs,
           error: result.error,
+          activeTools: pi.getActiveTools?.() ?? [],
         });
         saveReport();
       }

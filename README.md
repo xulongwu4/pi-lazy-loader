@@ -66,9 +66,15 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 - `pi-lazy-loader` captures genuine `session_start` and `resources_discover` event objects and contexts at eager startup.
 - Late-loaded factories run with a `pi` Proxy that intercepts `pi.on`.
 - Handlers registered for `session_start` and `resources_discover` are replayed **exactly once** using the genuine event and context objects.
-- This guarantees `pi-fabric` bootstraps cleanly without throwing `"Pi Fabric has not bootstrapped"`.
+- This lets `pi-fabric` bootstrap cleanly without throwing `"Pi Fabric has not bootstrapped"`.
 
-### 4. Resources-Discovery Ceiling
+### 4. Fabric Gateway Compatibility
+
+Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly and the active set remains only `fabric_exec`.
+
+The Phase 2.5 guarded configuration therefore defers `pi-web-access` and `pi-mcp-adapter`, but not `pi-fabric`.
+
+### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
 
 ---

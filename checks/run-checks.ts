@@ -123,7 +123,7 @@ const mockPi: any = {
   },
 };
 
-const loader = new LazyLoader(mockPi, agentDir);
+const loader = new LazyLoader(mockPi, agentDir, false);
 
 // Simulate genuine startup events
 loader.setSessionStart(
@@ -142,6 +142,18 @@ for (const s of initialStates) {
   assert(s.status === "deferred", `Expected initial status 'deferred' for ${s.manifest.name}, got ${s.status}`);
 }
 console.log("  ✓ All 10 packages initialized in 'deferred' status");
+
+// Reconcile eager settings without touching the real settings file.
+const eagerDir = join(tmpdir(), `pi-lazy-eager-${Date.now()}`);
+mkdirSync(eagerDir, { recursive: true });
+const eagerSettings = join(eagerDir, "settings.json");
+writeFileSync(eagerSettings, JSON.stringify({ packages: ["npm:pi-fabric", { source: "npm:pi-web-access", extensions: [] }] }));
+const marked = loader.syncConfiguredEager(eagerSettings);
+assert(marked.includes("pi-fabric"), "Configured eager pi-fabric must be marked loaded");
+assert(loader.getPackageState("pi-fabric")?.status === "loaded", "Eager pi-fabric status must be loaded");
+assert(loader.getPackageState("pi-web-access")?.status === "deferred", "Filtered pi-web-access must remain deferred");
+rmSync(eagerDir, { recursive: true, force: true });
+console.log("  ✓ Eager settings reconcile to loaded while extensions: [] remains deferred");
 
 // Test concurrent loads: 5 simultaneous calls to loadPackage("pi-token-burden")
 const concurrentPromises = [
@@ -175,7 +187,7 @@ assert(quotasResult.entries?.length === 6, `pi-quotas must load all 6 entries, g
 console.log(`  ✓ Multi-entry package pi-quotas loaded all 6 entry points`);
 
 // Test partial failure: create mock loader where one entry fails
-const failLoader = new LazyLoader(mockPi, agentDir);
+const failLoader = new LazyLoader(mockPi, agentDir, false);
 const invalidResult = await failLoader.loadPackage("non-existent-pkg-abc");
 assert(!invalidResult.success, "Non-existent package must return success: false");
 assert(invalidResult.status === "failed", "Non-existent package must be marked failed");
@@ -286,6 +298,11 @@ try {
 console.log("Check 3 passed.\n");
 
 // -----------------------------------------------------------------------------
+if (process.env.PI_LAZY_SKIP_E2E === "1") {
+  console.log("Skipping Check 4 (PI_LAZY_SKIP_E2E=1). Checks 1-3 passed.");
+  process.exit(0);
+}
+
 // CHECK 4: Non-interactive End-to-End Proof (Pi + Gemini + pi-fabric + fabric_exec)
 // -----------------------------------------------------------------------------
 console.log("--- Check 4: Non-interactive End-to-End Proof via Pi CLI ---");

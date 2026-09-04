@@ -1,4 +1,6 @@
 import { createJiti } from "jiti";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as piAgentCore from "@earendil-works/pi-agent-core";
 import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import * as piAiOauth from "@earendil-works/pi-ai/oauth";
@@ -84,7 +86,7 @@ export class LazyLoader {
   };
   private agentDir: string;
 
-  constructor(pi: any, agentDir?: string) {
+  constructor(pi: any, agentDir?: string, syncSettings = true) {
     this.pi = pi;
     this.agentDir = agentDir ?? getUserAgentDir();
 
@@ -96,6 +98,7 @@ export class LazyLoader {
         newTools: [],
       });
     }
+    if (syncSettings) this.syncConfiguredEager();
   }
 
   setSessionStart(event: any, ctx: any) {
@@ -108,6 +111,35 @@ export class LazyLoader {
 
   getLifecycleState(): LifecycleState {
     return this.lifecycleState;
+  }
+
+  /** Mark packages whose extensions Pi already loaded eagerly, preventing duplicate factories. */
+  syncConfiguredEager(settingsPath = join(this.agentDir, "settings.json")): string[] {
+    let settings: any;
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    } catch {
+      return [];
+    }
+
+    const eagerSources = new Set<string>();
+    for (const item of settings?.packages ?? []) {
+      if (typeof item === "string") {
+        eagerSources.add(item);
+      } else if (item && typeof item.source === "string" && !(Array.isArray(item.extensions) && item.extensions.length === 0)) {
+        eagerSources.add(item.source);
+      }
+    }
+
+    const marked: string[] = [];
+    for (const state of this.states.values()) {
+      if (state.status === "deferred" && eagerSources.has(state.manifest.source)) {
+        state.status = "loaded";
+        state.loadedEntries = ["<configured eager>"];
+        marked.push(state.manifest.name);
+      }
+    }
+    return marked;
   }
 
   getAllStates(): PackageState[] {
