@@ -10,6 +10,10 @@ import {
   type MergedCommandDefinition,
 } from "./src/command-config.js";
 import { formatStartupDescription } from "./src/command-presentation.js";
+import {
+  readToolCache,
+  buildLazyLoadGuidance,
+} from "./src/tool-cache.js";
 
 function formatStatus(status: PackageState["status"]): string {
   switch (status) {
@@ -43,7 +47,7 @@ export function formatPackageList(
         const cmdStatus = loader
           ? loader.getCommandStatus(s.manifest.name, d.commandName)
           : s.status === "loaded"
-            ? "ready"
+            ? (s.loadedEntries.includes("<configured eager>") ? "ready (eager)" : "ready")
             : s.status;
         return `/${d.commandName} [${cmdStatus}]`;
       });
@@ -58,7 +62,18 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   const loader = new LazyLoader(pi);
 
   // Load merged command proxy configurations and write diagnostics to stderr
-  const { definitions, diagnostics } = loadCommandConfig();
+  const { definitions, diagnostics } = loadCommandConfig({ agentDir: loader.getAgentDir() });
+
+  // Diagnose packages configured with a non-empty extensions filter that declare commands
+  const commandPackageNames = new Set(definitions.map((d) => d.packageName));
+  for (const pkgName of loader.getPartialExtensionPackages()) {
+    if (commandPackageNames.has(pkgName)) {
+      diagnostics.push(
+        `Package "${pkgName}" has a non-empty "extensions" filter in settings.json. Command proxies may be missing. Use "extensions": [] to defer or omit "extensions" for fully eager.`
+      );
+    }
+  }
+
   for (const diag of diagnostics) {
     console.error(`[pi-lazy-loader] ${diag}`);
   }
@@ -98,6 +113,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   pi.on("session_start", (event: any, ctx: any) => {
     loader.setSessionStart(event, ctx);
     loader.syncConfiguredEager();
+
     if (diagnostics.length > 0 && ctx.hasUI) {
       ctx.ui.notify(`pi-lazy-loader: ${diagnostics.join("; ")}`, "warning");
     }
@@ -277,18 +293,23 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   });
 
   // 3. Register strict TypeBox tool: lazy_load
+  const deferredStates = loader.getAllStates().filter((s) => s.status === "deferred");
+  const toolCache = readToolCache(loader.getAgentDir());
+  const guidance = buildLazyLoadGuidance(
+    deferredStates.map((s) => ({ name: s.manifest.name, capability: s.manifest.capability })),
+    toolCache
+  );
+
   pi.registerTool({
     name: "lazy_load",
     label: "Lazy Load",
-    description: "Load a deferred Pi extension: subagent delegation → @tintinweb/pi-subagents; workflows/research → @quintinshaw/pi-dynamic-workflows; web search/fetch → pi-web-access; MCP servers → pi-mcp-adapter.",
-    promptSnippet: "Load deferred capabilities: subagents, workflows, web search/fetch, or MCP servers",
-    promptGuidelines: [
-      "Use lazy_load before claiming a deferred subagent, workflow, web, or MCP capability is unavailable.",
-    ],
+    description: guidance.description,
+    promptSnippet: guidance.promptSnippet,
+    promptGuidelines: guidance.promptGuidelines,
     parameters: Type.Object(
       {
         package: Type.String({
-          description: "Package name or source; use @tintinweb/pi-subagents for delegation, @quintinshaw/pi-dynamic-workflows for workflows/research, pi-web-access for web, or pi-mcp-adapter for MCP.",
+          description: guidance.parameterDescription,
         }),
       },
       { additionalProperties: false }
