@@ -5,6 +5,11 @@ export interface CommandProxyDeclaration {
   description?: string;
 }
 
+export interface ToolProxyDeclaration {
+  name: string;
+  faithful?: boolean;
+}
+
 export interface ManifestEntry {
   name: string;
   source: string;
@@ -13,6 +18,7 @@ export interface ManifestEntry {
   capability: string;
   aliases?: string[];
   commands?: CommandProxyDeclaration[];
+  tools?: ToolProxyDeclaration[];
 }
 
 export const MANIFEST: ManifestEntry[] = (rawManifest as ManifestEntry[]).map((entry) => {

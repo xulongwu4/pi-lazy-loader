@@ -99,6 +99,9 @@ export class LazyLoader {
   private agentDir: string;
   private reservedCommands = new Map<string, Map<string, ReserveCommandOptions>>();
   private capturedCommands = new Map<string, Map<string, any>>();
+  private reservedTools = new Map<string, Set<string>>();
+  private protectedTools = new Map<string, Set<string>>();
+  private capturedTools = new Map<string, Map<string, any>>();
   private partialExtensionPackages = new Set<string>();
 
   private getCapturedCommand(packageName: string, commandName: string): any {
@@ -204,6 +207,33 @@ export class LazyLoader {
       this.reservedCommands.set(manifest.name, names);
     }
     names.set(commandName, metadata ?? {});
+  }
+
+  reserveTool(identifier: string, toolName: string): void {
+    const manifest = findManifestEntry(identifier);
+    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
+    let names = this.reservedTools.get(manifest.name);
+    if (!names) {
+      names = new Set<string>();
+      this.reservedTools.set(manifest.name, names);
+    }
+    names.add(toolName);
+  }
+
+  protectTool(identifier: string, toolName: string): void {
+    const manifest = findManifestEntry(identifier);
+    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
+    let names = this.protectedTools.get(manifest.name);
+    if (!names) {
+      names = new Set<string>();
+      this.protectedTools.set(manifest.name, names);
+    }
+    names.add(toolName);
+  }
+
+  getCapturedTool(identifier: string, toolName: string): any | undefined {
+    const manifest = findManifestEntry(identifier);
+    return manifest ? this.capturedTools.get(manifest.name)?.get(toolName) : undefined;
   }
 
   isCommandCaptured(identifier: string, commandName: string): boolean {
@@ -315,10 +345,11 @@ export class LazyLoader {
         const toolsBefore = new Set((this.pi?.getAllTools?.() ?? []).map((t: any) => t.name));
 
         const stagedRegistrations = new Map<string, any>();
+        const stagedTools = new Map<string, any>();
         const newlyLoaded: string[] = [];
         const observedTools = new Map<string, any>();
         for (const entryPath of entries) {
-          await this.loadSingleEntry(entryPath, manifest.name, stagedRegistrations, observedTools);
+          await this.loadSingleEntry(entryPath, manifest.name, stagedRegistrations, stagedTools, observedTools);
           newlyLoaded.push(entryPath);
         }
 
@@ -352,6 +383,17 @@ export class LazyLoader {
           }
 
           this.pi.registerCommand(name, committedOptions);
+        }
+
+        // Capture reserved definitions only after every entry and lifecycle replay succeeds.
+        // Each startup stub publishes its own real definition after its per-tool validation.
+        if (stagedTools.size > 0) {
+          let captured = this.capturedTools.get(manifest.name);
+          if (!captured) {
+            captured = new Map<string, any>();
+            this.capturedTools.set(manifest.name, captured);
+          }
+          for (const [name, tool] of stagedTools) captured.set(name, tool);
         }
 
         const toolsAfter = (this.pi?.getAllTools?.() ?? []).map((t: any) => t.name);
@@ -412,6 +454,7 @@ export class LazyLoader {
     entryPath: string,
     packageName: string,
     stagedRegistrations?: Map<string, any>,
+    stagedTools?: Map<string, any>,
     observedTools?: Map<string, any>
   ): Promise<void> {
     const jiti = createJiti(import.meta.url, {
@@ -434,6 +477,11 @@ export class LazyLoader {
           return (tool: any) => {
             if (tool && typeof tool.name === "string") {
               observedTools?.set(tool.name, tool);
+              if (this.protectedTools.get(packageName)?.has(tool.name)) return;
+              if (this.reservedTools.get(packageName)?.has(tool.name)) {
+                stagedTools?.set(tool.name, tool);
+                return;
+              }
             }
             return typeof target.registerTool === "function" ? target.registerTool(tool) : undefined;
           };

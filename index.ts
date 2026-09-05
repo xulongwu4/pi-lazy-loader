@@ -10,6 +10,7 @@ import {
   type MergedCommandDefinition,
 } from "./src/command-config.js";
 import { formatStartupDescription } from "./src/command-presentation.js";
+import { registerToolProxies } from "./src/tool-proxy.js";
 import {
   readToolCache,
   buildLazyLoadGuidance,
@@ -63,6 +64,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
 
   // Load merged command proxy configurations and write diagnostics to stderr
   const { definitions, diagnostics } = loadCommandConfig({ agentDir: loader.getAgentDir() });
+  const toolCache = readToolCache(loader.getAgentDir());
 
   // Diagnose packages configured with a non-empty extensions filter that declare commands
   const commandPackageNames = new Set(definitions.map((d) => d.packageName));
@@ -109,10 +111,16 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     }
   };
 
+  let toolProxiesRegistered = false;
+
   // 1. Eagerly capture genuine lifecycle events at startup for late replay
   pi.on("session_start", (event: any, ctx: any) => {
     loader.setSessionStart(event, ctx);
     loader.syncConfiguredEager();
+    if (!toolProxiesRegistered) {
+      diagnostics.push(...registerToolProxies(pi, loader, MANIFEST, toolCache));
+      toolProxiesRegistered = true;
+    }
 
     if (diagnostics.length > 0 && ctx.hasUI) {
       ctx.ui.notify(`pi-lazy-loader: ${diagnostics.join("; ")}`, "warning");
@@ -294,7 +302,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
 
   // 3. Register strict TypeBox tool: lazy_load
   const deferredStates = loader.getAllStates().filter((s) => s.status === "deferred");
-  const toolCache = readToolCache(loader.getAgentDir());
   const guidance = buildLazyLoadGuidance(
     deferredStates.map((s) => ({ name: s.manifest.name, capability: s.manifest.capability })),
     toolCache

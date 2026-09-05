@@ -2,17 +2,18 @@
 
 **Updated:** 2026-09-05
 **Repository:** <https://github.com/xulongwu4/pi-lazy-loader>  
-**Released version:** `v0.3.4`
-**Release commit:** tag `v0.3.4`
+**Released version:** `v0.4.0`
+**Release commit:** tag `v0.4.0`
 
 ## Executive Status
 
 `pi-lazy-loader` is implemented, released, installed, and active in production configuration. The repository working tree was clean before this document was added; `main`, `origin/main`, and annotated tag `v0.3.0` all point to the verified release history.
 
-The loader currently supports two complementary lazy-loading paths:
+The loader currently supports three complementary lazy-loading paths:
 
-1. **LLM tool loading:** the prompt-visible `lazy_load` tool imports selected package extensions on demand and immediately refreshes the available tool catalog.
-2. **Slash-command proxies:** lightweight startup commands load deferred packages before invoking their real handlers. v0.3.0 supports manifest-driven and user-configured command declarations.
+1. **Direct tool proxies:** real-name startup stubs load deferred packages on invocation; Tier 1 forwards the original call, while Tier 2 loads and explicitly requests one retry.
+2. **LLM tool loading:** the prompt-visible `lazy_load` tool imports selected package extensions on demand and immediately refreshes the available tool catalog.
+3. **Slash-command proxies:** lightweight startup commands load deferred packages before invoking their real handlers. v0.3.0 supports manifest-driven and user-configured command declarations.
 
 The validated production configuration defers four extension packages while keeping their skills, prompts, themes, and installed files available:
 
@@ -35,7 +36,8 @@ The validated production configuration defers four extension packages while keep
 | `v0.3.1` | `6988909` | Tool-cache prompt generation, bounded prompt budget, item boundary truncation, sticky session failure |
 | `v0.3.2` | `05a88c6` | Tool metadata capture harvest, JSON serialization safety, Pi ABI fingerprinting, cache v2 format |
 | `v0.3.3` | `b304e11` | Managed-install Pi ABI fallback through the running CLI entrypoint |
-| `v0.3.4` | tag `v0.3.4` | Resolve the symlinked Pi CLI entrypoint before walking to its package metadata |
+| `v0.3.4` | `36db2d4` | Resolve the symlinked Pi CLI entrypoint before walking to its package metadata |
+| `v0.4.0` | tag `v0.4.0` | Two-tier real-name tool proxies with faithful forwarding and announce-and-retry fallback |
 
 ## Phase Status
 
@@ -54,6 +56,7 @@ The validated production configuration defers four extension packages while keep
 | Phase 5 prereqs / v0.3.2 | Complete | Tool metadata harvest (eight fields), prepareArguments flag, Pi ABI fingerprint, cache v2 compatibility |
 | Phase 5 prereqs / v0.3.3 | Complete | Resolve Pi ABI from the running CLI when managed git installs cannot resolve the peer dependency |
 | Phase 5 prereqs / v0.3.4 | Complete | Resolve `~/.local/bin/pi` symlink before the managed-install ABI fallback walk |
+| Phase 5 / v0.4.0 | Complete | Tier 1 same-call execution for static web tools; Tier 2 load-and-retry floor for workflows and MCP gateway tools |
 
 ## Production Configuration
 
@@ -62,10 +65,10 @@ The validated production configuration defers four extension packages while keep
 Pi settings reference the tagged release:
 
 ```text
-git:github.com/xulongwu4/pi-lazy-loader@v0.3.0
+git:github.com/xulongwu4/pi-lazy-loader@v0.4.0
 ```
 
-The managed checkout reports package version `0.3.0`.
+The managed checkout reports package version `0.4.0`.
 
 ### Deferred Packages
 

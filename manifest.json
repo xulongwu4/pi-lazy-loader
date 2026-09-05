@@ -25,7 +25,15 @@
     "source": "npm:@quintinshaw/pi-dynamic-workflows",
     "locator": "npm:@quintinshaw/pi-dynamic-workflows",
     "cost": 0.501,
-    "capability": "Dynamic workflows fan-out and deep-research execution"
+    "capability": "Dynamic workflows fan-out and deep-research execution",
+    "tools": [
+      {
+        "name": "workflow"
+      },
+      {
+        "name": "workflow_control"
+      }
+    ]
   },
   {
     "name": "@narumitw/pi-goal",
@@ -73,6 +81,14 @@
         "name": "mcp-auth",
         "description": "Authenticate with an MCP server"
       }
+    ],
+    "tools": [
+      {
+        "name": "mcp"
+      },
+      {
+        "name": "mcpScript"
+      }
     ]
   },
   {
@@ -80,7 +96,25 @@
     "source": "npm:pi-web-access",
     "locator": "npm:pi-web-access",
     "cost": 0.100,
-    "capability": "Web search, URL fetching, repo cloning, and PDF extraction"
+    "capability": "Web search, URL fetching, repo cloning, and PDF extraction",
+    "tools": [
+      {
+        "name": "fetch_content",
+        "faithful": true
+      },
+      {
+        "name": "get_search_content",
+        "faithful": true
+      },
+      {
+        "name": "source_check",
+        "faithful": true
+      },
+      {
+        "name": "web_search",
+        "faithful": true
+      }
+    ]
   },
   {
     "name": "pi-quotas",

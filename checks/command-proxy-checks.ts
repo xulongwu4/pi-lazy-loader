@@ -752,6 +752,7 @@ const expectedPackedFiles = [
   "src/resolver.ts",
   "src/settings.ts",
   "src/tool-cache.ts",
+  "src/tool-proxy.ts",
 ].sort();
 
 const packDryRun = spawnSync("npm", ["pack", "--dry-run", "--json"], {
