@@ -2,8 +2,8 @@
 
 **Updated:** 2026-09-05
 **Repository:** <https://github.com/xulongwu4/pi-lazy-loader>  
-**Released version:** `v0.3.3`
-**Release commit:** tag `v0.3.3`
+**Released version:** `v0.3.4`
+**Release commit:** tag `v0.3.4`
 
 ## Executive Status
 
@@ -34,7 +34,8 @@ The validated production configuration defers four extension packages while keep
 | `v0.3.0` | `82488c4` | Manifest-driven/user-configured command proxies, MCP matrix, atomic staged commit, review hardening |
 | `v0.3.1` | `6988909` | Tool-cache prompt generation, bounded prompt budget, item boundary truncation, sticky session failure |
 | `v0.3.2` | `05a88c6` | Tool metadata capture harvest, JSON serialization safety, Pi ABI fingerprinting, cache v2 format |
-| `v0.3.3` | tag `v0.3.3` | Managed-install Pi ABI fallback through the running CLI entrypoint |
+| `v0.3.3` | `b304e11` | Managed-install Pi ABI fallback through the running CLI entrypoint |
+| `v0.3.4` | tag `v0.3.4` | Resolve the symlinked Pi CLI entrypoint before walking to its package metadata |
 
 ## Phase Status
 
@@ -52,6 +53,7 @@ The validated production configuration defers four extension packages while keep
 | Phase 5 prereqs / v0.3.1 | Complete | Tool-cache prompt guidance, bounded prompt budget, item boundary truncation, sticky failure, diagnostic cleanup |
 | Phase 5 prereqs / v0.3.2 | Complete | Tool metadata harvest (eight fields), prepareArguments flag, Pi ABI fingerprint, cache v2 compatibility |
 | Phase 5 prereqs / v0.3.3 | Complete | Resolve Pi ABI from the running CLI when managed git installs cannot resolve the peer dependency |
+| Phase 5 prereqs / v0.3.4 | Complete | Resolve `~/.local/bin/pi` symlink before the managed-install ABI fallback walk |
 
 ## Production Configuration
 

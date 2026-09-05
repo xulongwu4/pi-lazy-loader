@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 
@@ -138,7 +138,11 @@ export function sanitizeToolDefinition(tool: any): CachedTool | undefined {
  */
 export function getPiRuntimeVersionFromEntrypoint(entrypoint = process.argv[1]): string | undefined {
   if (!entrypoint) return undefined;
-  let dir = dirname(entrypoint);
+  let resolvedEntrypoint = entrypoint;
+  try {
+    resolvedEntrypoint = realpathSync(entrypoint);
+  } catch {}
+  let dir = dirname(resolvedEntrypoint);
   while (true) {
     try {
       const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));

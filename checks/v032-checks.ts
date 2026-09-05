@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -588,6 +588,14 @@ console.log("--- Check 17: Managed-Install ABI Fallback ---");
     assert(
       getPiRuntimeVersionFromEntrypoint(cli) === "7.8.9",
       "fallback must find Pi package.json above the CLI entrypoint"
+    );
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir);
+    const symlink = join(binDir, "pi");
+    symlinkSync(cli, symlink);
+    assert(
+      getPiRuntimeVersionFromEntrypoint(symlink) === "7.8.9",
+      "fallback must resolve the CLI symlink used by real Pi installations"
     );
     assert(
       getPiRuntimeVersionFromEntrypoint(join(dir, "missing", "cli.js")) === "7.8.9",
