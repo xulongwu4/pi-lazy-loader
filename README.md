@@ -28,7 +28,7 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.3.1
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.3.2
 ```
 
 Keep skills, prompts, and themes eager while filtering only the four validated extension entries in `~/.pi/agent/settings.json`:
@@ -36,7 +36,7 @@ Keep skills, prompts, and themes eager while filtering only the four validated e
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader@v0.3.1",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.3.2",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
     { "source": "npm:pi-token-burden", "extensions": [] },
@@ -84,7 +84,7 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 
 Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep `lazy_load` visible alongside `fabric_exec`; after each load the loader refreshes Fabric's catalog and restores that two-tool active set, preventing same-turn policy leaks.
 
-The v0.3.1 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
+The v0.3.2 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
 
 ### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
@@ -225,6 +225,7 @@ bun checks/run-checks.ts
 Run `bun checks/phase4-command-checks.ts` for command-proxy capture, concurrency, repeat-call, forwarding, and error checks.
 Run `bun checks/command-proxy-checks.ts` for manifest command validation, user configuration, atomic staged-commit, multi-command capture, and packaging allowlist checks.
 Run `bun checks/v031-checks.ts` for sticky failure, tool-cache resilience, tool interception passthrough, prompt budget bounding, and partial extension filter checks.
+Run `bun checks/v032-checks.ts` for tool metadata harvest, serialization safety, Pi ABI fingerprinting, and cache v2 compatibility checks.
 
 The suite covers:
 1. **File/Directory Entry Resolution**: Validates resolution of single files, directory conventions (`llm-wiki/index.ts`), and multi-file packages (`pi-quotas` 6 entries), plus error handling.

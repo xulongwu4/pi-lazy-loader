@@ -316,7 +316,7 @@ export class LazyLoader {
 
         const stagedRegistrations = new Map<string, any>();
         const newlyLoaded: string[] = [];
-        const observedTools = new Set<string>();
+        const observedTools = new Map<string, any>();
         for (const entryPath of entries) {
           await this.loadSingleEntry(entryPath, manifest.name, stagedRegistrations, observedTools);
           newlyLoaded.push(entryPath);
@@ -356,7 +356,7 @@ export class LazyLoader {
 
         const toolsAfter = (this.pi?.getAllTools?.() ?? []).map((t: any) => t.name);
         const diffTools = toolsAfter.filter((name: string) => !toolsBefore.has(name));
-        const finalTools = observedTools.size > 0 ? Array.from(observedTools) : diffTools;
+        const finalTools = observedTools.size > 0 ? Array.from(observedTools.keys()) : diffTools;
 
         pkgState.status = "loaded";
         pkgState.loadedEntries = newlyLoaded;
@@ -367,7 +367,10 @@ export class LazyLoader {
         try {
           const pkgRoot = resolvePackageRoot(manifest.source, this.agentDir);
           const fingerprint = computePackageFingerprint(pkgRoot, entries);
-          updateCachedPackageTools(this.agentDir, manifest.name, fingerprint, finalTools);
+          const toolsToCache = observedTools.size > 0
+            ? Array.from(observedTools.values())
+            : diffTools;
+          updateCachedPackageTools(this.agentDir, manifest.name, fingerprint, toolsToCache);
         } catch (cacheErr: any) {
           console.error(`[pi-lazy-loader] Failed to cache tools for "${manifest.name}": ${cacheErr?.message ?? cacheErr}`);
         }
@@ -409,7 +412,7 @@ export class LazyLoader {
     entryPath: string,
     packageName: string,
     stagedRegistrations?: Map<string, any>,
-    observedTools?: Set<string>
+    observedTools?: Map<string, any>
   ): Promise<void> {
     const jiti = createJiti(import.meta.url, {
       moduleCache: false,
@@ -430,7 +433,7 @@ export class LazyLoader {
         if (prop === "registerTool") {
           return (tool: any) => {
             if (tool && typeof tool.name === "string") {
-              observedTools?.add(tool.name);
+              observedTools?.set(tool.name, tool);
             }
             return typeof target.registerTool === "function" ? target.registerTool(tool) : undefined;
           };

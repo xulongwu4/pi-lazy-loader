@@ -94,28 +94,31 @@ mkdirSync(testDir2, { recursive: true });
 
 try {
   // 2.1 Round-trip write and read
+  // v0.3.2: the writer fixture is version 2. Legacy v1 *file* migration is covered
+  // directly in checks/v032-checks.ts (Check 5), which writes a real v1 file to disk.
   const validCache: ToolCacheData = {
-    version: 1,
+    version: 2,
     packages: {
       "pi-web-access": {
         fingerprint: "1.0.0:123456",
-        tools: ["web_search", "fetch_url"],
+        tools: [{ name: "web_search" }, { name: "fetch_url" }],
       },
       "pi-mcp-adapter": {
         fingerprint: "0.5.0:789012",
-        tools: ["mcp_proxy"],
+        tools: [{ name: "mcp_proxy" }],
       },
     },
   };
   const writeSuccess = writeToolCache(testDir2, validCache);
   assert(writeSuccess === true, "writeToolCache must return true on success");
   const readBack = readToolCache(testDir2);
-  assert(readBack.version === 1, "Cache version must be 1");
+  assert(readBack.version === 2, "Cache reads normalize to version 2");
   assert(readBack.packages["pi-web-access"] !== undefined, "pi-web-access package must be present");
   assert(readBack.packages["pi-web-access"].fingerprint === "1.0.0:123456", "Fingerprint must match");
   assert(
-    JSON.stringify(readBack.packages["pi-web-access"].tools) === JSON.stringify(["web_search", "fetch_url"]),
-    "Tools array must match"
+    JSON.stringify(readBack.packages["pi-web-access"].tools.map((t) => t.name)) ===
+      JSON.stringify(["web_search", "fetch_url"]),
+    "Tool names must survive a write/read round trip"
   );
   console.log("  ✓ Tool cache writes and reads back correctly");
 
@@ -127,7 +130,7 @@ try {
   } catch (err) {
     assert(false, `readToolCache threw on corrupt JSON: ${err}`);
   }
-  assert(corruptRead.version === 1, "Corrupt file must yield version 1");
+  assert(corruptRead.version === 2, "Corrupt file must yield an empty version 2 cache");
   assert(Object.keys(corruptRead.packages).length === 0, "Corrupt file must yield empty packages map");
   console.log("  ✓ Corrupt cache file yields empty cache without throwing");
 
@@ -140,7 +143,7 @@ try {
   } catch (err) {
     assert(false, `readToolCache threw on oversized file: ${err}`);
   }
-  assert(oversizedRead.version === 1, "Oversized file must yield version 1");
+  assert(oversizedRead.version === 2, "Oversized file must yield an empty version 2 cache");
   assert(Object.keys(oversizedRead.packages).length === 0, "Oversized file must yield empty packages map");
   console.log("  ✓ Oversized cache file yields empty cache without throwing");
 
@@ -156,7 +159,7 @@ try {
   } catch (err) {
     assert(false, `readToolCache threw on wrong-version file: ${err}`);
   }
-  assert(wrongVersionRead.version === 1, "Wrong version must yield version 1");
+  assert(wrongVersionRead.version === 2, "Wrong version must yield an empty version 2 cache");
   assert(Object.keys(wrongVersionRead.packages).length === 0, "Wrong version must yield empty packages map");
   console.log("  ✓ Wrong-version cache file yields empty cache without throwing");
 } finally {
