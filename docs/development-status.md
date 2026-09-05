@@ -1,9 +1,9 @@
 # pi-lazy-loader Development Status
 
-**Updated:** 2026-09-04  
+**Updated:** 2026-09-05
 **Repository:** <https://github.com/xulongwu4/pi-lazy-loader>  
-**Released version:** `v0.3.2`
-**Release commit:** `pending` (working tree v0.3.2)
+**Released version:** `v0.3.3`
+**Release commit:** tag `v0.3.3`
 
 ## Executive Status
 
@@ -33,7 +33,8 @@ The validated production configuration defers four extension packages while keep
 | `v0.2.1` | `5be632a` | Target command-definition/description handoff |
 | `v0.3.0` | `82488c4` | Manifest-driven/user-configured command proxies, MCP matrix, atomic staged commit, review hardening |
 | `v0.3.1` | `6988909` | Tool-cache prompt generation, bounded prompt budget, item boundary truncation, sticky session failure |
-| `v0.3.2` | pending | Tool metadata capture harvest, JSON serialization safety, Pi ABI fingerprinting, cache v2 format |
+| `v0.3.2` | `05a88c6` | Tool metadata capture harvest, JSON serialization safety, Pi ABI fingerprinting, cache v2 format |
+| `v0.3.3` | tag `v0.3.3` | Managed-install Pi ABI fallback through the running CLI entrypoint |
 
 ## Phase Status
 
@@ -50,6 +51,7 @@ The validated production configuration defers four extension packages while keep
 | Phase 4.3 / v0.3.0 | Complete | Grouped user config, MCP command proxies, provenance UX, release gates |
 | Phase 5 prereqs / v0.3.1 | Complete | Tool-cache prompt guidance, bounded prompt budget, item boundary truncation, sticky failure, diagnostic cleanup |
 | Phase 5 prereqs / v0.3.2 | Complete | Tool metadata harvest (eight fields), prepareArguments flag, Pi ABI fingerprint, cache v2 compatibility |
+| Phase 5 prereqs / v0.3.3 | Complete | Resolve Pi ABI from the running CLI when managed git installs cannot resolve the peer dependency |
 
 ## Production Configuration
 

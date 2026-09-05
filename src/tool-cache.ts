@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
-import { isDeepStrictEqual } from "node:util";
 
 export const TOOL_CACHE_FILENAME = "lazy-loader-tools.json";
 export const MAX_CACHE_FILE_SIZE = 64 * 1024; // 64 KiB
@@ -133,18 +132,40 @@ export function sanitizeToolDefinition(tool: any): CachedTool | undefined {
 }
 
 /**
- * Resolve runtime Pi ABI version via @earendil-works/pi-coding-agent package.json.
- * Fails soft to "unknown" if not resolved; never throws.
+ * Resolve Pi's version by walking upward from the running CLI entrypoint.
+ * Managed git extensions cannot resolve Pi through their own peer-dependency tree,
+ * but `process.argv[1]` still lives inside Pi's installed package.
+ */
+export function getPiRuntimeVersionFromEntrypoint(entrypoint = process.argv[1]): string | undefined {
+  if (!entrypoint) return undefined;
+  let dir = dirname(entrypoint);
+  while (true) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
+      if (
+        pkg?.name === "@earendil-works/pi-coding-agent" &&
+        typeof pkg.version === "string"
+      ) {
+        return pkg.version;
+      }
+    } catch {}
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+/**
+ * Resolve runtime Pi ABI version. Peer resolution works in a source checkout; walking
+ * from the CLI entrypoint covers Pi-managed git installs. Fails soft to "unknown".
  */
 export function getPiRuntimeVersion(): string {
   try {
     const require = createRequire(import.meta.url);
     const pkg = require("@earendil-works/pi-coding-agent/package.json");
-    if (pkg && typeof pkg.version === "string") {
-      return pkg.version;
-    }
+    if (pkg && typeof pkg.version === "string") return pkg.version;
   } catch {}
-  return "unknown";
+  return getPiRuntimeVersionFromEntrypoint() ?? "unknown";
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   buildLazyLoadGuidance,
   computePackageFingerprint,
   getPiRuntimeVersion,
+  getPiRuntimeVersionFromEntrypoint,
   sanitizeToolDefinition,
   isJsonLossless,
   TOOL_CACHE_FILENAME,
@@ -566,6 +567,36 @@ console.log("--- Check 16: Subtle Round-Trip Losses ---");
   okSchema[Symbol.for("TypeBox.Kind")] = "Object";
   assert(isJsonLossless(okSchema) === true, "plain JSON data with symbol keys must remain lossless");
   console.log("  \u2713 -0, sparse arrays, custom array properties and toJSON are all caught");
+}
+
+
+// -----------------------------------------------------------------------------
+// CHECK 17: Managed-install ABI fallback walks from Pi's CLI entrypoint
+// -----------------------------------------------------------------------------
+console.log("--- Check 17: Managed-Install ABI Fallback ---");
+{
+  const dir = join(tmpdir(), `pi-lazy-v033-chk17-${Date.now()}`);
+  const cli = join(dir, "dist", "bundle", "cli.js");
+  mkdirSync(join(dir, "dist", "bundle"), { recursive: true });
+  try {
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "7.8.9" }),
+      "utf-8"
+    );
+    writeFileSync(cli, "", "utf-8");
+    assert(
+      getPiRuntimeVersionFromEntrypoint(cli) === "7.8.9",
+      "fallback must find Pi package.json above the CLI entrypoint"
+    );
+    assert(
+      getPiRuntimeVersionFromEntrypoint(join(dir, "missing", "cli.js")) === "7.8.9",
+      "entrypoint file need not exist when its ancestor is Pi"
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  console.log("  ✓ Managed-install fallback resolves Pi version from the CLI package tree");
 }
 
 // -----------------------------------------------------------------------------
