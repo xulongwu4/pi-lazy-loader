@@ -7,9 +7,9 @@ import { MANIFEST } from "./src/manifest.js";
 import { getUserSettingsPath, pinPackageInSettingsFile } from "./src/settings.js";
 import {
   loadCommandConfig,
-  formatStartupDescription,
   type MergedCommandDefinition,
 } from "./src/command-config.js";
+import { formatStartupDescription } from "./src/command-presentation.js";
 
 function formatStatus(status: PackageState["status"]): string {
   switch (status) {
@@ -82,6 +82,13 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   const saveReport = () => {
     if (reportPath && report) {
       try {
+        if (typeof (pi as any).getCommands === "function") {
+          report.registeredCommands = (pi as any).getCommands().map((c: any) => ({
+            name: c.name,
+            description: c.description,
+            source: c.sourceInfo?.source ?? c.source,
+          }));
+        }
         writeFileSync(reportPath, JSON.stringify(report, null, 2), "utf-8");
       } catch {}
     }

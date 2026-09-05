@@ -1,7 +1,8 @@
-import { mkdirSync, rmSync, writeFileSync, statSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, statSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 import { MANIFEST, findManifestEntry } from "../src/manifest.js";
 import {
@@ -9,12 +10,15 @@ import {
   mergeCommandDefinitions,
   validateUserConfig,
   validateManifestCommands,
-  formatStartupDescription,
-  formatPostLoadDescription,
   type MergedCommandDefinition,
   type UserCommandConfig,
 } from "../src/command-config.js";
+import {
+  formatStartupDescription,
+  formatPostLoadDescription,
+} from "../src/command-presentation.js";
 import { LazyLoader } from "../src/loader.js";
+import lazyLoaderExtension from "../index.js";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
@@ -345,22 +349,69 @@ console.log("  ✓ targetLabel is rendered alongside, never replacing, canonical
 // -----------------------------------------------------------------------------
 console.log("--- Check 5: Reserve Before Register & Multi-Command Capture ---");
 
-const fixtureRoot = join(tmpdir(), `pi-lazy-mcp-fixture-${Date.now()}`);
-const mcpPkgDir = join(fixtureRoot, "npm", "node_modules", "pi-mcp-adapter");
-mkdirSync(mcpPkgDir, { recursive: true });
+interface MockPackageFixtureOptions {
+  packageName: string;
+  indexJs: string;
+  packageJson?: Record<string, any>;
+}
 
-writeFileSync(
-  join(mcpPkgDir, "package.json"),
-  JSON.stringify({
-    name: "pi-mcp-adapter",
-    type: "module",
-    pi: { extensions: ["./index.js"] },
-  }),
-);
+function createMockPackageFixture(options: MockPackageFixtureOptions) {
+  const root = join(tmpdir(), `pi-lazy-fixture-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const pkgDir = join(root, "npm", "node_modules", options.packageName);
+  mkdirSync(pkgDir, { recursive: true });
 
-writeFileSync(
-  join(mcpPkgDir, "index.js"),
-  `export default function (pi) {
+  writeFileSync(
+    join(pkgDir, "package.json"),
+    JSON.stringify(
+      options.packageJson ?? {
+        name: options.packageName,
+        type: "module",
+        pi: { extensions: ["./index.js"] },
+      }
+    )
+  );
+
+  writeFileSync(join(pkgDir, "index.js"), options.indexJs);
+
+  const registeredCommands = new Map<string, any>();
+  const registeredTools = new Map<string, any>();
+  const mockPi: any = {
+    registerTool(tool: any) {
+      registeredTools.set(tool.name, tool);
+    },
+    registerCommand(name: string, command: any) {
+      registeredCommands.set(name, command);
+    },
+    getCommands() {
+      return Array.from(registeredCommands.entries()).map(([name, cmd]) => ({
+        name,
+        description: cmd.description,
+        source: "pi-lazy-loader",
+      }));
+    },
+    getAllTools() {
+      return Array.from(registeredTools.values());
+    },
+    getActiveTools() {
+      return [];
+    },
+    setActiveTools() {},
+    on() {},
+  };
+
+  return {
+    root,
+    registeredCommands,
+    mockPi,
+    cleanup() {
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+const fixture = createMockPackageFixture({
+  packageName: "pi-mcp-adapter",
+  indexJs: `export default function (pi) {
     globalThis.__mcpFactoryRunCount = (globalThis.__mcpFactoryRunCount || 0) + 1;
     pi.registerCommand("mcp", {
       description: "real mcp description",
@@ -380,67 +431,46 @@ writeFileSync(
       async handler() { return "unreserved"; },
     });
   }`,
-);
+});
 
-const registeredCommands = new Map<string, any>();
-const mockPi: any = {
-  registerTool() {},
-  registerCommand(name: string, command: any) {
-    registeredCommands.set(name, command);
-  },
-  getAllTools() { return []; },
-  getActiveTools() { return []; },
-  setActiveTools() {},
-  on() {},
-};
-
+const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 try {
-  const loader = new LazyLoader(mockPi, fixtureRoot, false);
+  process.env.PI_CODING_AGENT_DIR = fixture.root;
 
-  // Reserve all 3 commands before registering any proxy
-  loader.reserveCommand("pi-mcp-adapter", "mcp", { declaredDescription: "Show MCP server status", decorateDescription: true });
-  loader.reserveCommand("pi-mcp-adapter", "pi-mcp", { declaredDescription: "Show MCP server status", decorateDescription: true });
-  loader.reserveCommand("pi-mcp-adapter", "mcp-auth", { declaredDescription: "Authenticate with an MCP server", decorateDescription: true });
+  // Invoke the real default extension factory from index.ts against mock Pi and temp agent dir with pi-mcp-adapter deferred
+  lazyLoaderExtension(fixture.mockPi);
 
-  // Register the startup stubs in mockPi
-  const stubMcp = {
-    description: "Show MCP server status [lazy target: pi-mcp-adapter; proxy: pi-lazy-loader]",
-    getArgumentCompletions(_prefix: string) { return null; },
-    handler() {},
-  };
-  const stubPiMcp = {
-    description: "Show MCP server status [lazy target: pi-mcp-adapter; proxy: pi-lazy-loader]",
-    getArgumentCompletions(_prefix: string) { return null; },
-    handler() {},
-  };
-  const stubMcpAuth = {
-    description: "Authenticate with an MCP server [lazy target: pi-mcp-adapter; proxy: pi-lazy-loader]",
-    getArgumentCompletions(_prefix: string) { return null; },
-    handler() {},
-  };
-  registeredCommands.set("mcp", stubMcp);
-  registeredCommands.set("pi-mcp", stubPiMcp);
-  registeredCommands.set("mcp-auth", stubMcpAuth);
+  // Retrieve actual registered startup proxies from mockPi
+  const startupMcp = fixture.registeredCommands.get("mcp");
+  const startupPiMcp = fixture.registeredCommands.get("pi-mcp");
+  const startupMcpAuth = fixture.registeredCommands.get("mcp-auth");
+
+  assert(startupMcp !== undefined, "Actual /mcp startup proxy must be registered by index extension factory");
+  assert(startupPiMcp !== undefined, "Actual /pi-mcp startup proxy must be registered by index extension factory");
+  assert(startupMcpAuth !== undefined, "Actual /mcp-auth startup proxy must be registered by index extension factory");
+  assert(typeof startupMcp.getArgumentCompletions === "function", "Startup proxy must provide getArgumentCompletions");
 
   // 5.1 Pre-load completions return null without importing/loading package
-  assert(stubMcp.getArgumentCompletions("test") === null, "Pre-load completions must return null");
-  assert((globalThis as any).__mcpFactoryRunCount === undefined, "Pre-load completion must not run factory");
-  console.log("  ✓ Pre-load completions return null without triggering package load");
+  const preLoadCompletions = startupMcp.getArgumentCompletions("test");
+  assert(preLoadCompletions === null, "Pre-load completions on real startup proxy must return null");
+  assert((globalThis as any).__mcpFactoryRunCount === undefined, "Pre-load completion must not run factory or import package");
+  console.log("  ✓ Pre-load completions on real startup proxy return null without triggering package load");
 
   // 5.2 Invoking /mcp loads the factory once and captures all three declared commands
-  const loadRes = await loader.loadPackage("pi-mcp-adapter");
-  assert(loadRes.success, `pi-mcp-adapter load failed: ${loadRes.error}`);
-  assert((globalThis as any).__mcpFactoryRunCount === 1, "Factory must execute exactly once");
+  const ctx = { cwd: "/fixture", hasUI: true, ui: { notify() {} } };
+  const res1 = await startupMcp.handler("arg1", ctx);
+  assert(res1 === "mcp-result:arg1", "Invoking startup proxy for /mcp must execute captured handler and return result");
+  assert((globalThis as any).__mcpFactoryRunCount === 1, "Factory must execute exactly once upon first command invocation");
 
   // All 3 commands replaced in mockPi
-  const cmdMcp = registeredCommands.get("mcp");
-  const cmdPiMcp = registeredCommands.get("pi-mcp");
-  const cmdMcpAuth = registeredCommands.get("mcp-auth");
-  const cmdUnreserved = registeredCommands.get("unreserved-cmd");
+  const cmdMcp = fixture.registeredCommands.get("mcp");
+  const cmdPiMcp = fixture.registeredCommands.get("pi-mcp");
+  const cmdMcpAuth = fixture.registeredCommands.get("mcp-auth");
+  const cmdUnreserved = fixture.registeredCommands.get("unreserved-cmd");
 
-  assert(cmdMcp !== stubMcp, "/mcp stub must be replaced after load");
-  assert(cmdPiMcp !== stubPiMcp, "/pi-mcp stub must be replaced after load");
-  assert(cmdMcpAuth !== stubMcpAuth, "/mcp-auth stub must be replaced after load");
+  assert(cmdMcp !== startupMcp, "/mcp stub must be replaced after load");
+  assert(cmdPiMcp !== startupPiMcp, "/pi-mcp stub must be replaced after load");
+  assert(cmdMcpAuth !== startupMcpAuth, "/mcp-auth stub must be replaced after load");
   assert(cmdUnreserved !== undefined, "Non-reserved command must be forwarded immediately");
 
   // 5.3 Provenance and decoration preserved
@@ -448,30 +478,36 @@ try {
   assert(cmdMcp.description.startsWith("real mcp description"), "Committed command must start with real target description");
 
   // 5.4 Handler and completion identity preserved by reference
-  const ctx = { cwd: "/fixture", hasUI: true };
-  const res1 = await loader.invokeCapturedCommand("pi-mcp-adapter", "mcp", "arg1", ctx);
-  assert(res1 === "mcp-result:arg1", "Captured handler for /mcp must execute correctly");
+  const res2 = await cmdPiMcp.handler("arg2", ctx);
+  assert(res2 === "pi-mcp-result:arg2", "Direct handler for /pi-mcp must execute correctly");
 
-  const res2 = await loader.invokeCapturedCommand("pi-mcp-adapter", "pi-mcp", "arg2", ctx);
-  assert(res2 === "pi-mcp-result:arg2", "Captured handler for /pi-mcp must execute correctly");
+  const res3 = await cmdMcpAuth.handler("arg3", ctx);
+  assert(res3 === "mcp-auth-result:arg3", "Direct handler for /mcp-auth must execute correctly");
 
-  const res3 = await loader.invokeCapturedCommand("pi-mcp-adapter", "mcp-auth", "arg3", ctx);
-  assert(res3 === "mcp-auth-result:arg3", "Captured handler for /mcp-auth must execute correctly");
+  // Subsequent invocation through startup stub also works idempotently without re-running factory
+  const res2ViaStub = await startupPiMcp.handler("arg2-repeat", ctx);
+  assert(res2ViaStub === "pi-mcp-result:arg2-repeat", "Startup stub invocation after load works idempotently");
+  assert((globalThis as any).__mcpFactoryRunCount === 1, "Subsequent command call must not re-run package factory");
 
   // Completions post-load come from target
   const comp = await cmdMcp.getArgumentCompletions("myprefix");
   assert(comp[0].value === "myprefix-mcp", "Post-load completions must be served by real target");
 
   // No suffixed duplicate commands created
-  assert(!registeredCommands.has("mcp:1"), "No :1 duplicate for /mcp");
-  assert(!registeredCommands.has("pi-mcp:1"), "No :1 duplicate for /pi-mcp");
-  assert(!registeredCommands.has("mcp-auth:1"), "No :1 duplicate for /mcp-auth");
+  assert(!fixture.registeredCommands.has("mcp:1"), "No :1 duplicate for /mcp");
+  assert(!fixture.registeredCommands.has("pi-mcp:1"), "No :1 duplicate for /pi-mcp");
+  assert(!fixture.registeredCommands.has("mcp-auth:1"), "No :1 duplicate for /mcp-auth");
 
   console.log("  ✓ Multi-command load captures all declared commands in one factory execution");
   console.log("  ✓ Handlers, completions, and delegated provenance verified post-load");
 } finally {
   delete (globalThis as any).__mcpFactoryRunCount;
-  rmSync(fixtureRoot, { recursive: true, force: true });
+  if (prevAgentDir !== undefined) {
+    process.env.PI_CODING_AGENT_DIR = prevAgentDir;
+  } else {
+    delete process.env.PI_CODING_AGENT_DIR;
+  }
+  fixture.cleanup();
 }
 
 // -----------------------------------------------------------------------------
@@ -479,22 +515,9 @@ try {
 // -----------------------------------------------------------------------------
 console.log("--- Check 6: Staged Commit Atomicity on Load Failure ---");
 
-const failFixtureRoot = join(tmpdir(), `pi-lazy-fail-fixture-${Date.now()}`);
-const failPkgDir = join(failFixtureRoot, "npm", "node_modules", "pi-token-burden");
-mkdirSync(failPkgDir, { recursive: true });
-
-writeFileSync(
-  join(failPkgDir, "package.json"),
-  JSON.stringify({
-    name: "pi-token-burden",
-    type: "module",
-    pi: { extensions: ["./index.js"] },
-  }),
-);
-
-writeFileSync(
-  join(failPkgDir, "index.js"),
-  `export default function (pi) {
+const failFixture = createMockPackageFixture({
+  packageName: "pi-token-burden",
+  indexJs: `export default function (pi) {
     pi.registerCommand("token-burden", {
       description: "should not be committed",
       handler() {},
@@ -505,29 +528,17 @@ writeFileSync(
     });
     throw new Error("Simulated factory failure during package load!");
   }`,
-);
-
-const failCommands = new Map<string, any>();
-const failMockPi: any = {
-  registerTool() {},
-  registerCommand(name: string, command: any) {
-    failCommands.set(name, command);
-  },
-  getAllTools() { return []; },
-  getActiveTools() { return []; },
-  setActiveTools() {},
-  on() {},
-};
+});
 
 try {
-  const loader = new LazyLoader(failMockPi, failFixtureRoot, false);
+  const loader = new LazyLoader(failFixture.mockPi, failFixture.root, false);
   loader.reserveCommand("pi-token-burden", "token-burden", { declaredDescription: "Show token-budget usage", decorateDescription: true });
 
   const initialStub = {
     description: "Initial startup stub",
     handler() { return "stub"; },
   };
-  failCommands.set("token-burden", initialStub);
+  failFixture.registeredCommands.set("token-burden", initialStub);
 
   // Attempt to load package - will fail!
   const failResult = await loader.loadPackage("pi-token-burden");
@@ -535,7 +546,7 @@ try {
   assert(failResult.status === "failed", "Package status must be 'failed'");
 
   // ATOMICITY ASSERTION: Stub must remain completely intact!
-  const currentCommand = failCommands.get("token-burden");
+  const currentCommand = failFixture.registeredCommands.get("token-burden");
   assert(currentCommand === initialStub, "Startup stub must remain intact and NOT replaced after failed load");
   assert(currentCommand.description === "Initial startup stub", "Stub description must remain unchanged");
 
@@ -549,11 +560,123 @@ try {
   assert(invokeErr.includes("did not register") || invokeErr.includes("failed"), "Invoking uncommitted command must fail cleanly");
 
   // Non-reserved command was forwarded immediately before the throw
-  assert(failCommands.has("unreserved-during-fail"), "Non-reserved command forwarded immediately as per Amendment 1");
+  assert(failFixture.registeredCommands.has("unreserved-during-fail"), "Non-reserved command forwarded immediately as per Amendment 1");
 
   console.log("  ✓ Staged commit atomicity verified: failed load leaves stub intact and commits nothing");
 } finally {
-  rmSync(failFixtureRoot, { recursive: true, force: true });
+  failFixture.cleanup();
+}
+
+// 6.2 Duplicate target registration within one factory aborts package load with actionable error
+const dupFixture = createMockPackageFixture({
+  packageName: "pi-token-burden",
+  indexJs: `export default function (pi) {
+    pi.registerCommand("token-burden", {
+      description: "first registration",
+      handler() {},
+    });
+    pi.registerCommand("token-burden", {
+      description: "second duplicate registration",
+      handler() {},
+    });
+  }`,
+});
+
+try {
+  const loader = new LazyLoader(dupFixture.mockPi, dupFixture.root, false);
+  loader.reserveCommand("pi-token-burden", "token-burden", { declaredDescription: "Token burden" });
+
+  const initialStub = {
+    description: "Initial startup stub",
+    handler() { return "stub"; },
+  };
+  dupFixture.registeredCommands.set("token-burden", initialStub);
+
+  const failResult = await loader.loadPackage("pi-token-burden");
+  assert(!failResult.success, "Package load must fail on duplicate registration within one factory");
+  assert(failResult.status === "failed", "Package status must be 'failed'");
+  assert(
+    failResult.error?.includes("Duplicate target registration") &&
+    failResult.error?.includes("token-burden") &&
+    failResult.error?.includes("pi-token-burden"),
+    `Error must be actionable package+command error, got: ${failResult.error}`
+  );
+
+  // ATOMICITY: startup stub remains intact
+  const currentCommand = dupFixture.registeredCommands.get("token-burden");
+  assert(currentCommand === initialStub, "Startup stub must remain intact and NOT replaced");
+  assert(currentCommand.description === "Initial startup stub", "Stub description must remain unchanged");
+
+  // ATOMICITY: no staged commands committed
+  assert(!loader.isCommandCaptured("pi-token-burden", "token-burden"), "Duplicate command must not be committed to captured state");
+  assert(loader.getCommandStatus("pi-token-burden", "token-burden") === "failed", "Command status must be 'failed'");
+  console.log("  ✓ Duplicate target registration within one factory aborts load with actionable error and preserves startup stub");
+} finally {
+  dupFixture.cleanup();
+}
+
+// 6.3 Duplicate target registration across extension entries aborts package load with actionable error
+const dupMultiFixture = createMockPackageFixture({
+  packageName: "pi-token-burden",
+  packageJson: {
+    name: "pi-token-burden",
+    type: "module",
+    pi: { extensions: ["./entry1.js", "./entry2.js"] },
+  },
+  indexJs: "",
+});
+
+const pkgDirMulti = join(dupMultiFixture.root, "npm", "node_modules", "pi-token-burden");
+writeFileSync(
+  join(pkgDirMulti, "entry1.js"),
+  `export default function (pi) {
+    pi.registerCommand("token-burden", {
+      description: "entry1 registration",
+      handler() {},
+    });
+  }`
+);
+writeFileSync(
+  join(pkgDirMulti, "entry2.js"),
+  `export default function (pi) {
+    pi.registerCommand("token-burden", {
+      description: "entry2 duplicate registration",
+      handler() {},
+    });
+  }`
+);
+
+try {
+  const loader = new LazyLoader(dupMultiFixture.mockPi, dupMultiFixture.root, false);
+  loader.reserveCommand("pi-token-burden", "token-burden", { declaredDescription: "Token burden" });
+
+  const initialStub = {
+    description: "Initial startup stub",
+    handler() { return "stub"; },
+  };
+  dupMultiFixture.registeredCommands.set("token-burden", initialStub);
+
+  const failResult = await loader.loadPackage("pi-token-burden");
+  assert(!failResult.success, "Package load must fail on cross-entry duplicate registration");
+  assert(failResult.status === "failed", "Package status must be 'failed'");
+  assert(
+    failResult.error?.includes("Duplicate target registration") &&
+    failResult.error?.includes("token-burden") &&
+    failResult.error?.includes("pi-token-burden"),
+    `Error must be actionable package+command error, got: ${failResult.error}`
+  );
+
+  // ATOMICITY: startup stub remains intact
+  const currentCommand = dupMultiFixture.registeredCommands.get("token-burden");
+  assert(currentCommand === initialStub, "Startup stub must remain intact and NOT replaced");
+  assert(currentCommand.description === "Initial startup stub", "Stub description must remain unchanged");
+
+  // ATOMICITY: no staged commands committed
+  assert(!loader.isCommandCaptured("pi-token-burden", "token-burden"), "Duplicate command must not be committed to captured state");
+  assert(loader.getCommandStatus("pi-token-burden", "token-burden") === "failed", "Command status must be 'failed'");
+  console.log("  ✓ Duplicate target registration across extension entries aborts load with actionable error and preserves startup stub");
+} finally {
+  dupMultiFixture.cleanup();
 }
 
 // -----------------------------------------------------------------------------
@@ -561,41 +684,18 @@ try {
 // -----------------------------------------------------------------------------
 console.log("--- Check 7: Command Readiness in Loader State ---");
 
-const readinessRoot = join(tmpdir(), `pi-lazy-ready-fixture-${Date.now()}`);
-const readyPkgDir = join(readinessRoot, "npm", "node_modules", "pi-mcp-adapter");
-mkdirSync(readyPkgDir, { recursive: true });
-
-writeFileSync(
-  join(readyPkgDir, "package.json"),
-  JSON.stringify({
-    name: "pi-mcp-adapter",
-    type: "module",
-    pi: { extensions: ["./index.js"] },
-  }),
-);
-
-// Factory registers /mcp and /pi-mcp, but NOT /mcp-auth (missing command scenario)
-writeFileSync(
-  join(readyPkgDir, "index.js"),
-  `export default function (pi) {
+const readyFixture = createMockPackageFixture({
+  packageName: "pi-mcp-adapter",
+  // Factory registers /mcp and /pi-mcp, but NOT /mcp-auth (missing command scenario)
+  indexJs: `export default function (pi) {
     pi.registerCommand("mcp", { description: "MCP", handler() {} });
     pi.registerCommand("pi-mcp", { description: "PI-MCP", handler() {} });
     // Note: mcp-auth is omitted intentionally
   }`,
-);
-
-const readyCommands = new Map<string, any>();
-const readyMockPi: any = {
-  registerTool() {},
-  registerCommand(name: string, command: any) { readyCommands.set(name, command); },
-  getAllTools() { return []; },
-  getActiveTools() { return []; },
-  setActiveTools() {},
-  on() {},
-};
+});
 
 try {
-  const loader = new LazyLoader(readyMockPi, readinessRoot, false);
+  const loader = new LazyLoader(readyFixture.mockPi, readyFixture.root, false);
   loader.reserveCommand("pi-mcp-adapter", "mcp");
   loader.reserveCommand("pi-mcp-adapter", "pi-mcp");
   loader.reserveCommand("pi-mcp-adapter", "mcp-auth");
@@ -616,26 +716,114 @@ try {
 
   console.log("  ✓ Per-command readiness distinguishes 'deferred', 'ready', and 'missing'");
 } finally {
-  rmSync(readinessRoot, { recursive: true, force: true });
+  readyFixture.cleanup();
 }
 
 // -----------------------------------------------------------------------------
-// CHECK 8: Packaging Allowlist Check
+// CHECK 8: Packaging Exact Allowlist & Clean Install Smoke
 // -----------------------------------------------------------------------------
-console.log("--- Check 8: Packaging Allowlist Check ---");
+console.log("--- Check 8: Packaging Exact Allowlist & Clean Install Smoke ---");
 
 const currentDir = fileURLToPath(new URL(".", import.meta.url));
+const projectRoot = join(currentDir, "..");
 const pkgJson = JSON.parse(
-  readFileSync(join(currentDir, "..", "package.json"), "utf-8")
+  readFileSync(join(projectRoot, "package.json"), "utf-8")
 );
-const expectedAllowlist = ["index.ts", "manifest.json", "src", "README.md", "lazy-loader.schema.json"];
 
+// 8.1 package.json files array matches expected patterns
+const expectedFilesField = ["index.ts", "manifest.json", "src", "README.md", "lazy-loader.schema.json"];
 assert(Array.isArray(pkgJson.files), "package.json must contain files array");
-for (const item of expectedAllowlist) {
+for (const item of expectedFilesField) {
   assert(pkgJson.files.includes(item), `package.json files must include "${item}"`);
-  assert(statSync(join(currentDir, "..", item)), `Published file/dir "${item}" must exist`);
+  assert(statSync(join(projectRoot, item)), `Published file/dir "${item}" must exist`);
 }
-console.log("  ✓ Explicit published paths allowlist verified");
+
+// 8.2 Exact published files allowlist: every file in the packed tarball must match the allowlist exactly
+const expectedPackedFiles = [
+  "README.md",
+  "index.ts",
+  "lazy-loader.schema.json",
+  "manifest.json",
+  "package.json",
+  "src/command-config.ts",
+  "src/command-presentation.ts",
+  "src/loader.ts",
+  "src/manifest.ts",
+  "src/resolver.ts",
+  "src/settings.ts",
+].sort();
+
+const packDryRun = spawnSync("npm", ["pack", "--dry-run", "--json"], {
+  cwd: projectRoot,
+  encoding: "utf-8",
+});
+assert(packDryRun.status === 0, `npm pack --dry-run failed: ${packDryRun.stderr}`);
+const packInfo = JSON.parse(packDryRun.stdout);
+const actualPackedFiles: string[] = (packInfo[0].files as Array<{ path: string }>)
+  .map((f) => f.path)
+  .sort();
+
+assert(
+  JSON.stringify(actualPackedFiles) === JSON.stringify(expectedPackedFiles),
+  `Packed files do not match exact allowlist!\nExpected: ${JSON.stringify(expectedPackedFiles)}\nActual: ${JSON.stringify(actualPackedFiles)}`
+);
+console.log(`  ✓ Packed files match exact allowlist (${actualPackedFiles.length} files, zero unexpected files)`);
+
+// 8.3 Clean install smoke test: pack into tarball, install in clean consumer, start Pi
+const packTempDir = join(tmpdir(), `pi-lazy-pack-smoke-${Date.now()}`);
+mkdirSync(packTempDir, { recursive: true });
+const consumerTempDir = join(tmpdir(), `pi-lazy-consumer-smoke-${Date.now()}`);
+mkdirSync(consumerTempDir, { recursive: true });
+
+try {
+  // Pack tarball
+  const packProc = spawnSync("npm", ["pack", "--pack-destination", packTempDir], {
+    cwd: projectRoot,
+    encoding: "utf-8",
+  });
+  assert(packProc.status === 0, `npm pack failed: ${packProc.stderr}`);
+  const tgzFile = readdirSync(packTempDir).find((f) => f.endsWith(".tgz"));
+  assert(tgzFile !== undefined, "Packed tarball must exist");
+  const tgzPath = join(packTempDir, tgzFile);
+
+  // Initialize consumer package and install tarball with bun
+  writeFileSync(
+    join(consumerTempDir, "package.json"),
+    JSON.stringify({ name: "consumer-smoke", type: "module" }, null, 2),
+    "utf-8"
+  );
+  const bunAdd = spawnSync("bun", ["add", tgzPath], {
+    cwd: consumerTempDir,
+    encoding: "utf-8",
+  });
+  assert(bunAdd.status === 0, `bun add failed: ${bunAdd.stderr}`);
+
+  const installedDir = join(consumerTempDir, "node_modules", "pi-lazy-loader");
+  assert(statSync(installedDir).isDirectory(), "Installed pi-lazy-loader directory must exist");
+  assert(statSync(join(installedDir, "index.ts")).isFile(), "Installed index.ts must exist");
+
+  // Verify no duplicate Pi runtime peers were pulled into consumer node_modules
+  const consumerModules = readdirSync(join(consumerTempDir, "node_modules"));
+  assert(
+    !consumerModules.includes("@earendil-works"),
+    "Clean installation must not bundle duplicate @earendil-works Pi runtime peers"
+  );
+
+  // Start Pi non-interactively from the installed copy to ensure factory initializes cleanly
+  const piSmoke = spawnSync(
+    "pi",
+    ["-ne", "-e", join(installedDir, "index.ts"), "--version"],
+    {
+      encoding: "utf-8",
+      timeout: 30000,
+    }
+  );
+  assert(piSmoke.status === 0, `Pi startup with installed copy failed: ${piSmoke.stderr}`);
+  console.log("  ✓ Clean install smoke test passed: installed tarball cleanly loads in Pi without duplicate peers");
+} finally {
+  rmSync(packTempDir, { recursive: true, force: true });
+  rmSync(consumerTempDir, { recursive: true, force: true });
+}
 
 console.log("\n==============================================");
 console.log("ALL COMMAND PROXY CHECKS COMPLETED AND PASSED");

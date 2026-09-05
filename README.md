@@ -28,7 +28,7 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.2.1
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.3.0
 ```
 
 Keep skills, prompts, and themes eager while filtering only the four validated extension entries in `~/.pi/agent/settings.json`:
@@ -36,7 +36,7 @@ Keep skills, prompts, and themes eager while filtering only the four validated e
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader@v0.2.1",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.3.0",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
     { "source": "npm:pi-token-burden", "extensions": [] },
@@ -84,7 +84,7 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 
 Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep `lazy_load` visible alongside `fabric_exec`; after each load the loader refreshes Fabric's catalog and restores that two-tool active set, preventing same-turn policy leaks.
 
-The v0.2.1 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
+The v0.3.0 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
 
 ### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
@@ -109,6 +109,95 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
   - Preserves all unknown/custom properties.
   - Writes atomically (temp file + rename).
   - Refuses missing or ambiguous package entries.
+
+---
+
+## User Configuration (`lazy-loader.json`)
+
+To add or customize slash-command proxies for packages known to `manifest.json`, place a `lazy-loader.json` file in the active agent directory:
+
+```text
+${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json
+```
+
+A JSON Schema (`lazy-loader.schema.json`) ships with the package and validates the structure:
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/xulongwu4/pi-lazy-loader/v0.3.0/lazy-loader.schema.json",
+  "version": 1,
+  "packages": {
+    "pi-mcp-adapter": {
+      "targetLabel": "mcp-service",
+      "commands": [
+        "mcp",
+        "pi-mcp",
+        {
+          "name": "mcp-auth",
+          "description": "Authenticate with an MCP server"
+        }
+      ]
+    }
+  }
+}
+```
+
+### Configuration Syntax & Rules
+
+- **Version**: `version: 1` is required.
+- **`$schema`**: Optional string; ignored at runtime and exempt from unknown-property checks.
+- **Grouped packages**: `packages` is keyed by manifest package name or alias (e.g. `pi-mcp-adapter` or `npm:pi-mcp-adapter`). Keys must resolve through the built-in manifest.
+- **Command shorthand & objects**: The `commands` array accepts string shorthand (e.g. `"mcp"`) or command objects (`{ "name": "...", "description": "..." }`). String shorthand is normalized to `{ "name": "<str>" }` and preserves built-in descriptions.
+- **Supplemental `targetLabel`**: An optional string per package group. It is rendered alongside the canonical package name (e.g. `pi-mcp-adapter (mcp-service)`), never replacing it.
+- **String constraints**: Command names must match `^[a-z0-9][a-z0-9-]*$` (no leading slash). Descriptions (1–240 chars) and labels (1–100 chars) reject newlines and control characters.
+- **File size limit**: The configuration file must not exceed 64 KiB.
+
+### Validation, Diagnostics, and Soft Failure
+
+Configuration loading is strictly non-fatal:
+- Syntactic errors, schema violations, unknown packages, or oversized files write diagnostic warnings to `stderr` at startup and surface a notification in the UI at `session_start`. Pi startup never crashes.
+- Conflicting user declarations (e.g. differing descriptions for the same command name, or the same command name mapped to multiple packages) skip proxy registration for the conflicted name; valid declarations continue to register.
+- If `lazy-loader.json` is missing or invalid, the loader seamlessly falls back to built-in command declarations.
+
+### Provenance and Canonical `sourceInfo` Limitation
+
+Pi's public extension API does not permit third-party extensions to spoof or mutate `sourceInfo`. Pi derives canonical provenance strictly from the registering `ExtensionAPI`, so `sourceInfo` remains `pi-lazy-loader`.
+
+To provide clear attribution without violating this boundary:
+- **Before load**: The startup stub description displays delegated provenance:
+  `Show MCP server status [lazy target: pi-mcp-adapter; proxy: pi-lazy-loader]`
+- **After load**: The committed command retains the target's real description and adds delegated attribution:
+  `<real description> [target: pi-mcp-adapter; via pi-lazy-loader]`
+- **Eager packages**: Packages configured eagerly in `settings.json` bypass proxy registration entirely and retain their genuine package `sourceInfo`.
+
+### Settings Scope & Project Overrides Limitation
+
+In v0.3.0, only the global agent-directory file `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json` is read, preserving Pi's project-trust boundary.
+
+Similarly, `syncConfiguredEager()` observes the global agent-directory settings (`${agentDir}/settings.json`). Project-level configuration overrides in `.pi/settings.json` are not merged by the loader in v0.3.0. A project-level override can therefore leave a proxy registered for a package that project settings made eager, or leave a proxy absent for a package that project settings deferred.
+
+### Reload & Restart Semantics
+
+Modifications to `lazy-loader.json` or `settings.json` take effect when Pi is restarted or when `/reload` is issued in an interactive session. No active filesystem watchers or background daemons are used.
+
+### Rollback Procedure
+
+Before deploying or updating:
+1. Create timestamped backups of `settings.json` (resolving symlinks) and `lazy-loader.json`:
+   ```bash
+   cp -p "$(readlink -f ~/.pi/agent/settings.json)" ~/.pi/agent/settings.json.backup
+   [ -f ~/.pi/agent/lazy-loader.json ] && cp -p ~/.pi/agent/lazy-loader.json ~/.pi/agent/lazy-loader.json.backup
+   ```
+2. To roll back to `v0.2.1`:
+   ```bash
+   pi install git:github.com/xulongwu4/pi-lazy-loader@v0.2.1
+   ```
+3. Restore `settings.json` and remove or restore `lazy-loader.json`:
+   ```bash
+   cp -f ~/.pi/agent/settings.json.backup "$(readlink -f ~/.pi/agent/settings.json)"
+   rm -f ~/.pi/agent/lazy-loader.json
+   ```
+   Restart Pi. In `v0.2.1`, `pi-token-burden` remains lazy-loadable via `/token-burden`, while `pi-mcp-adapter` requires manual `/lazy add pi-mcp-adapter` before use.
 
 ### LLM Tool
 

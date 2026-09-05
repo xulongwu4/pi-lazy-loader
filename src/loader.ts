@@ -13,7 +13,10 @@ import * as typeboxValue from "typebox/value";
 
 import { MANIFEST, type ManifestEntry, findManifestEntry } from "./manifest.js";
 import { getUserAgentDir, resolvePackageEntries } from "./resolver.js";
-import { formatPostLoadDescription } from "./command-config.js";
+import {
+  type CommandDescriptionContext,
+  formatPostLoadDescription,
+} from "./command-presentation.js";
 
 export interface ReserveCommandOptions {
   declaredDescription?: string;
@@ -93,7 +96,24 @@ export class LazyLoader {
   };
   private agentDir: string;
   private reservedCommands = new Map<string, Map<string, ReserveCommandOptions>>();
-  private capturedCommands = new Map<string, any>();
+  private capturedCommands = new Map<string, Map<string, any>>();
+
+  private getCapturedCommand(packageName: string, commandName: string): any {
+    return this.capturedCommands.get(packageName)?.get(commandName);
+  }
+
+  private setCapturedCommand(packageName: string, commandName: string, command: any): void {
+    let pkgMap = this.capturedCommands.get(packageName);
+    if (!pkgMap) {
+      pkgMap = new Map<string, any>();
+      this.capturedCommands.set(packageName, pkgMap);
+    }
+    pkgMap.set(commandName, command);
+  }
+
+  private hasCapturedCommand(packageName: string, commandName: string): boolean {
+    return this.capturedCommands.get(packageName)?.has(commandName) ?? false;
+  }
 
   constructor(pi: any, agentDir?: string, syncSettings = true) {
     this.pi = pi;
@@ -169,7 +189,7 @@ export class LazyLoader {
   isCommandCaptured(identifier: string, commandName: string): boolean {
     const manifest = findManifestEntry(identifier);
     if (!manifest) return false;
-    return this.capturedCommands.has(`${manifest.name}:${commandName}`);
+    return this.hasCapturedCommand(manifest.name, commandName);
   }
 
   getCommandStatus(identifier: string, commandName: string): "deferred" | "ready" | "missing" | "failed" | "loading" {
@@ -186,7 +206,7 @@ export class LazyLoader {
   async invokeCapturedCommand(identifier: string, commandName: string, args: string, ctx: any): Promise<any> {
     const manifest = findManifestEntry(identifier);
     if (!manifest) throw new Error(`Unknown package "${identifier}"`);
-    const command = this.capturedCommands.get(`${manifest.name}:${commandName}`);
+    const command = this.getCapturedCommand(manifest.name, commandName);
     if (!command?.handler) throw new Error(`Package "${manifest.name}" did not register reserved command "${commandName}"`);
     return await command.handler(args, ctx);
   }
@@ -268,7 +288,7 @@ export class LazyLoader {
 
         // Commit staged registrations atomically only after all entries and lifecycle replay succeeded
         for (const [name, targetOptions] of stagedRegistrations.entries()) {
-          this.capturedCommands.set(`${manifest.name}:${name}`, targetOptions);
+          this.setCapturedCommand(manifest.name, name, targetOptions);
 
           const meta = this.reservedCommands.get(manifest.name)?.get(name);
           const shouldDecorate =
@@ -277,13 +297,14 @@ export class LazyLoader {
 
           let committedOptions: any;
           if (shouldDecorate) {
+            const descCtx: CommandDescriptionContext = {
+              packageName: manifest.name,
+              commandName: name,
+              declaredDescription: meta?.declaredDescription,
+              targetLabel: meta?.targetLabel,
+            };
             const decoratedDescription = formatPostLoadDescription(
-              {
-                packageName: manifest.name,
-                commandName: name,
-                declaredDescription: meta?.declaredDescription,
-                targetLabel: meta?.targetLabel,
-              },
+              descCtx,
               targetOptions?.description
             );
             committedOptions = {
@@ -364,11 +385,21 @@ export class LazyLoader {
           return (name: string, command: any) => {
             if (this.reservedCommands.get(packageName)?.has(name)) {
               if (stagedRegistrations) {
+                if (stagedRegistrations.has(name)) {
+                  throw new Error(
+                    `Duplicate target registration for command "${name}" in package "${packageName}"`
+                  );
+                }
                 // Stage intercepted registration for atomic commit upon successful load
                 stagedRegistrations.set(name, command);
                 return;
               }
-              this.capturedCommands.set(`${packageName}:${name}`, command);
+              if (this.hasCapturedCommand(packageName, name)) {
+                throw new Error(
+                  `Duplicate target registration for command "${name}" in package "${packageName}"`
+                );
+              }
+              this.setCapturedCommand(packageName, name, command);
             }
             return target.registerCommand(name, command);
           };

@@ -1,18 +1,27 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { MANIFEST, type ManifestEntry, findManifestEntry } from "./manifest.js";
+import {
+  MANIFEST,
+  type ManifestEntry,
+  type CommandProxyDeclaration,
+  findManifestEntry,
+} from "./manifest.js";
 import { getUserAgentDir } from "./resolver.js";
+import {
+  type CommandDescriptionContext,
+  formatTargetDisplay,
+  formatStartupDescription,
+  formatPostLoadDescription,
+} from "./command-presentation.js";
 
 const COMMAND_NAME_REGEX = /^[a-z0-9][a-z0-9-]*$/;
 const MAX_CONFIG_FILE_SIZE = 64 * 1024; // 64 KiB
 const MAX_DESCRIPTION_LENGTH = 240;
 const MAX_LABEL_LENGTH = 100;
 
-export interface CommandProxyDeclaration {
-  name: string;
-  description?: string;
-}
+export type { CommandProxyDeclaration, CommandDescriptionContext };
+export { formatTargetDisplay, formatStartupDescription, formatPostLoadDescription };
 
 export type UserCommandDeclaration = string | CommandProxyDeclaration;
 
@@ -27,12 +36,8 @@ export interface UserCommandConfig {
   packages: Record<string, UserPackageCommandConfig>;
 }
 
-export interface MergedCommandDefinition {
-  packageName: string;
+export interface MergedCommandDefinition extends CommandDescriptionContext {
   packageSource: string;
-  commandName: string;
-  description?: string;
-  targetLabel?: string;
 }
 
 export interface CommandConfigResult {
@@ -56,14 +61,23 @@ function isValidTargetLabel(label: unknown): label is string {
   return !/[\x00-\x1f\x7f]/.test(label);
 }
 
+export interface ValidatedBuiltinCommands {
+  builtinMap: Map<string, Map<string, { description?: string }>>;
+  packageToSource: Map<string, string>;
+  diagnostics: string[];
+}
+
 /**
- * Validate command declarations in manifest entries.
+ * Validate and normalize command declarations in manifest entries once.
  */
-export function validateManifestCommands(entries: ManifestEntry[]): string[] {
+export function normalizeManifestCommands(entries: ManifestEntry[]): ValidatedBuiltinCommands {
   const diagnostics: string[] = [];
+  const builtinMap = new Map<string, Map<string, { description?: string }>>();
+  const packageToSource = new Map<string, string>();
   const commandToPackage = new Map<string, string>();
 
   for (const entry of entries) {
+    packageToSource.set(entry.name, entry.source);
     if (!entry.commands) continue;
     if (!Array.isArray(entry.commands)) {
       diagnostics.push(`Package "${entry.name}" commands must be an array`);
@@ -71,6 +85,8 @@ export function validateManifestCommands(entries: ManifestEntry[]): string[] {
     }
 
     const seenInPackage = new Set<string>();
+    const cmds = new Map<string, { description?: string }>();
+
     for (const cmd of entry.commands) {
       if (!cmd || typeof cmd !== "object") {
         diagnostics.push(`Package "${entry.name}" has invalid command entry: expected object`);
@@ -100,11 +116,23 @@ export function validateManifestCommands(entries: ManifestEntry[]): string[] {
         );
       } else {
         commandToPackage.set(cmd.name, entry.name);
+        cmds.set(cmd.name, { description: cmd.description });
       }
+    }
+
+    if (cmds.size > 0) {
+      builtinMap.set(entry.name, cmds);
     }
   }
 
-  return diagnostics;
+  return { builtinMap, packageToSource, diagnostics };
+}
+
+/**
+ * Validate command declarations in manifest entries.
+ */
+export function validateManifestCommands(entries: ManifestEntry[]): string[] {
+  return normalizeManifestCommands(entries).diagnostics;
 }
 
 /**
@@ -245,38 +273,23 @@ export function validateUserConfig(raw: unknown): { config?: UserCommandConfig; 
  * Resolves package aliases, normalizes commands, collapses duplicates, detects conflicts.
  */
 export function mergeCommandDefinitions(
-  manifestEntries: ManifestEntry[],
+  manifestEntries: ManifestEntry[] | ValidatedBuiltinCommands,
   userConfig?: UserCommandConfig
 ): CommandConfigResult {
-  const diagnostics: string[] = [];
+  const validatedBuiltins = Array.isArray(manifestEntries)
+    ? normalizeManifestCommands(manifestEntries)
+    : manifestEntries;
 
-  // 1. Built-in definitions keyed by canonical package name
-  // package -> Map<commandName, { description?: string }>
-  const builtinMap = new Map<string, Map<string, { description?: string }>>();
-  const packageToSource = new Map<string, string>();
-
-  for (const entry of manifestEntries) {
-    packageToSource.set(entry.name, entry.source);
-    if (entry.commands) {
-      const cmds = new Map<string, { description?: string }>();
-      for (const cmd of entry.commands) {
-        if (isValidCommandName(cmd.name)) {
-          cmds.set(cmd.name, { description: cmd.description });
-        }
-      }
-      if (cmds.size > 0) {
-        builtinMap.set(entry.name, cmds);
-      }
-    }
-  }
+  const diagnostics: string[] = [...validatedBuiltins.diagnostics];
+  const { builtinMap, packageToSource } = validatedBuiltins;
 
   // 2. Process user declarations grouped by canonical package name
-  // canonicalPackageName -> { targetLabel?: string; commands: Map<commandName, Set<string>> }
+  // canonicalPackageName -> { targetLabel?: string; commands: Map<commandName, { descriptions: Set<string> }> }
   const userPackages = new Map<
     string,
     {
       targetLabel?: string;
-      commands: Map<string, { descriptions: Set<string>; hasEmptyDesc: boolean }>;
+      commands: Map<string, { descriptions: Set<string> }>;
     }
   >();
 
@@ -303,14 +316,12 @@ export function mergeCommandDefinitions(
 
         let cmdData = existing.commands.get(name);
         if (!cmdData) {
-          cmdData = { descriptions: new Set(), hasEmptyDesc: false };
+          cmdData = { descriptions: new Set() };
           existing.commands.set(name, cmdData);
         }
 
         if (desc !== undefined && desc.length > 0) {
           cmdData.descriptions.add(desc);
-        } else {
-          cmdData.hasEmptyDesc = true;
         }
       }
     }
@@ -479,47 +490,4 @@ export function loadCommandConfig(options?: {
       ],
     };
   }
-}
-
-/**
- * Helper: format target display label.
- * Supplemental targetLabel is rendered alongside canonical package name, never replacing it.
- */
-export function formatTargetDisplay(packageName: string, targetLabel?: string): string {
-  if (targetLabel && targetLabel !== packageName) {
-    return `${packageName} (${targetLabel})`;
-  }
-  return packageName;
-}
-
-/**
- * Helper: compute startup stub description with delegated attribution.
- */
-export function formatStartupDescription(def: MergedCommandDefinition): string {
-  const targetDisplay = formatTargetDisplay(def.packageName, def.targetLabel);
-  const base =
-    def.description ?? `Load ${targetDisplay} on first use for /${def.commandName}`;
-  return `${base} [lazy target: ${targetDisplay}; proxy: pi-lazy-loader]`;
-}
-
-/**
- * Helper: compute post-load description with delegated attribution.
- */
-export function formatPostLoadDescription(
-  def:
-    | MergedCommandDefinition
-    | {
-        packageName: string;
-        commandName: string;
-        declaredDescription?: string;
-        description?: string;
-        targetLabel?: string;
-      },
-  targetDescription?: string
-): string {
-  const targetDisplay = formatTargetDisplay(def.packageName, def.targetLabel);
-  const declaredDesc =
-    "declaredDescription" in def ? def.declaredDescription : def.description;
-  const base = targetDescription ?? declaredDesc ?? `Run /${def.commandName}`;
-  return `${base} [target: ${targetDisplay}; via pi-lazy-loader]`;
 }
