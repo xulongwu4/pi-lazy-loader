@@ -7,7 +7,6 @@ export interface CommandProxyDeclaration {
 
 export interface ToolProxyDeclaration {
   name: string;
-  faithful?: boolean;
 }
 
 export interface ManifestEntry {

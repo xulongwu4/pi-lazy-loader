@@ -1,18 +1,18 @@
 # pi-lazy-loader Development Status
 
-**Updated:** 2026-09-05
+**Updated:** 2026-09-07
 **Repository:** <https://github.com/xulongwu4/pi-lazy-loader>  
-**Released version:** `v0.4.0`
-**Release commit:** `e9f917f`
+**Released version:** `v0.5.0`
+**Release reference:** `v0.5.0`
 
 ## Executive Status
 
-`pi-lazy-loader` v0.4.0 is implemented, reviewed, released, pushed, and installed in the production configuration. `main`, `origin/main`, and annotated tag `v0.4.0` point to commit `e9f917f`. Sessions started before installation require `/reload`; fresh child-process probes used the managed checkout successfully.
+`pi-lazy-loader` v0.5.0 is implemented, reviewed, released, and pushed. `main`, `origin/main`, and annotated tag `v0.5.0` point to the reviewed load-and-retry proxy implementation. The current managed production setting remains on v0.4.0 until explicitly upgraded; sessions require `/reload` after that upgrade.
 
 The loader currently supports three complementary lazy-loading paths:
 
-1. **Direct tool proxies:** real-name startup stubs load deferred packages on invocation; Tier 1 forwards the original call, while Tier 2 loads and explicitly requests one retry.
-2. **LLM tool loading:** the prompt-visible `lazy_load` tool imports selected package extensions on demand and immediately refreshes the available tool catalog.
+1. **Direct tool proxies:** real-name load-and-retry startup proxies load their package on invocation, publish real tools, and ask the model to retry using the loaded schema without executing the original call.
+2. **LLM tool loading:** the prompt-visible `lazy_load` tool independently imports a selected package on demand; it does not prescribe tool retries.
 3. **Slash-command proxies:** lightweight startup commands load deferred packages before invoking their real handlers. v0.3.0 supports manifest-driven and user-configured command declarations.
 
 The validated production configuration defers four extension packages while keeping their skills, prompts, themes, and installed files available:
@@ -38,6 +38,7 @@ The validated production configuration defers four extension packages while keep
 | `v0.3.3` | `b304e11` | Managed-install Pi ABI fallback through the running CLI entrypoint |
 | `v0.3.4` | `36db2d4` | Resolve the symlinked Pi CLI entrypoint before walking to its package metadata |
 | `v0.4.0` | `e9f917f` | Two-tier real-name tool proxies with faithful forwarding and announce-and-retry fallback |
+| `v0.5.0` | `v0.5.0` | Single load-and-retry real-name tool proxies, cache v3 simplification, and generic `lazy_load` guidance |
 
 ## Phase Status
 
@@ -57,6 +58,7 @@ The validated production configuration defers four extension packages while keep
 | Phase 5 prereqs / v0.3.3 | Complete | Resolve Pi ABI from the running CLI when managed git installs cannot resolve the peer dependency |
 | Phase 5 prereqs / v0.3.4 | Complete | Resolve `~/.local/bin/pi` symlink before the managed-install ABI fallback walk |
 | Phase 5 / v0.4.0 | Complete | Tier 1 same-call execution for static web tools; Tier 2 load-and-retry floor for workflows and MCP gateway tools |
+| Phase 5 consolidation / v0.5.0 | Complete | Single load-and-retry tool proxies with package activation and real-tool displacement |
 
 ## Production Configuration
 
@@ -155,9 +157,7 @@ M  snowblocks/pi/settings.json
 
 ### LLM Tool Interface
 
-`lazy_load` is always available and dynamically advertises deferred packages along with their cached tools (`lazy-loader-tools.json`), degrading to manifest capabilities when the cache is empty.
-
-Total generated prompt text across description, snippet, guidelines, and parameter description is strictly bounded by `MAX_LAZY_LOAD_PROMPT_BUDGET` (1200 characters). When deferred packages or tool lists exceed this budget, truncation drops whole list items cleanly and appends an honest marker like `(+N more, see /lazy list)` rather than cutting words or tool names in half.
+`lazy_load` is always available as a concise generic interface for loading a deferred Pi extension package on demand. It does not enumerate packages or tools and does not discuss retry behavior; direct tool proxies own the retry instruction.
 
 Failed loads are sticky for the remainder of the session: subsequent `lazy_load` calls fail fast without re-entering the load path, directing the user or agent to `/reload` or restart the session.
 
@@ -169,15 +169,15 @@ The full manifest and user command configuration are not injected into the LLM p
 
 Declared tool names are registered during `session_start`, after Pi action methods become available and before the first model turn.
 
-| Package | Tool | Tier | First invocation |
+| Package | Tool | Mode | First invocation |
 |---|---|---:|---|
-| `pi-web-access` | `web_search`, `fetch_content`, `get_search_content`, `source_check` | 1 | Load and execute the original call |
-| `@quintinshaw/pi-dynamic-workflows` | `workflow`, `workflow_control` | 2 | Load only; return `executed: false` and the retry target |
-| `pi-mcp-adapter` | `mcp`, `mcpScript` | 2 | Load only; return `executed: false` and the retry target |
+| `pi-web-access` | `web_search`, `fetch_content`, `get_search_content`, `source_check` | Load-and-retry | Loads package, does not execute tool, requests retry |
+| `@quintinshaw/pi-dynamic-workflows` | `workflow`, `workflow_control` | Load-and-retry | Loads package, does not execute tool, requests retry |
+| `pi-mcp-adapter` | `mcp`, `mcpScript` | Load-and-retry | Loads package, does not execute tool, requests retry |
 
-Tier 1 requires an explicit faithful declaration, a current complete cache entry, and `hasPrepareArguments: false`. All five Pi execution arguments (`toolCallId`, `params`, `signal`, `onUpdate`, `ctx`) are forwarded to the captured real definition. Tier 2 uses a permissive schema, never echoes caller arguments, and makes non-execution explicit.
+A proxy description prefers the cached real tool description (from the v3 advisory cache) and falls back to the manifest package capability. It explains that invoking the proxy loads the package and that the real tool must be called again afterward.
 
-Reserved registrations are captured after successful package initialization but are not globally published. Each stub publishes only its requested definition after per-tool validation. This prevents a valid sibling call from bypassing another tool's drift guard. Failed loads leave stubs intact; eager-name collisions remain protected when sibling tools later load the package.
+Proxy execution loads the package, never executes or echoes the original tool arguments, and returns structured details (`loaded: true`, `executed: false`, `package`, `retryTool`). `LazyLoader` publishes staged real tools so they displace the startup proxies. Failed loads leave proxies intact (atomicity). Missing declared tools are tracked so `lazy_load` can warn; surviving proxies in loaded state return terminal manifest drift errors with no retry loop, and failed loads return terminal reload guidance.
 
 Configuration-derived `mcp__*` tools are intentionally outside the initial static rollout.
 
@@ -252,8 +252,8 @@ Current release verification includes:
 - Staged atomic failure and duplicate registration tests.
 - Command readiness and provenance formatting tests.
 - Exact package-file allowlist and clean packed consumer install.
-- v0.3.1 cache/guidance, v0.3.2 metadata/serialization, and v0.4.0 two-tier proxy regression suites.
-- Tier selection, concurrent same-call forwarding, all-five-argument identity, Tier 2 non-execution/privacy, per-tool publication, drift guards, failed-load preservation, and eager collision protection.
+- v0.5.0 load-and-retry proxy regression suite.
+- Proxy-triggered loading, non-execution/privacy, retry guidance, staged real-tool displacement, concurrent load deduplication, drift guards, failed-load preservation, and eager collision protection.
 
 The final verification mutation-tested five essential behaviors by deliberately breaking them; every mutation was caught:
 
@@ -282,13 +282,19 @@ Production configuration was also smoke-tested after installing v0.3.0:
 duplicates=none
 ```
 
-v0.4.0 fresh-process evidence:
+Superseded two-tier v0.4.0 fresh-process evidence (retained for history):
 
 - Non-Fabric direct `web_search`, with no `lazy_load`, loaded `pi-web-access` and returned a real result on the original call.
 - Fabric `fabric_exec -> extensions.web_search`, with no `lazy_load`, returned a real result on the original call.
 - Direct `workflow` produced exactly one observed `workflow` call, loaded the package, reported `executed: false`, and did not execute before retry.
 - Managed v0.3.4 metadata harvest fingerprinted the live Pi ABI as `0.85.0`; earlier `unknown` fingerprints led to the symlink-aware resolver fix.
 - `openai-codex/gpt-5.6-sol` issued three high-severity race/bypass findings during v0.4.0 review; all received behavioral regressions, and the final verdict was `APPROVE`.
+
+v0.5.0 release verification:
+
+- `bun run check:v050` passed proxy-triggered loading, retry guidance, cache v3, drift, collision, concurrency, and Fabric restoration checks.
+- Core, command-proxy packaging, command delegation, TypeScript, and `git diff --check` checks passed.
+- The live model E2E remained externally blocked by Gemini HTTP 429 quota; deterministic and clean-package checks passed.
 
 ### Performance
 
@@ -308,7 +314,7 @@ The first release-evidence run measured approximately **0.667 s** median saving.
 
 ### Packaging
 
-The v0.4.0 package allowlist contains exactly 13 runtime files:
+The v0.5.0 package allowlist contains exactly 13 runtime files:
 
 ```text
 README.md
@@ -340,7 +346,7 @@ The loader reads global agent-directory settings only. It does not merge project
 
 ### Tool Proxy Coverage
 
-Direct invocation covers the eight statically declared tool names above. Configuration-derived `mcp__*` tools are not registered from cached names automatically, so they still require `lazy_load`, a gateway tool, or future explicit configuration-aware declarations. Tier 2 costs one additional model turn by design.
+Load-and-retry proxies cover the eight statically declared tool names above. Invoking one loads its package and asks the model to retry the now-real tool. Configuration-derived `mcp__*` tools have no startup proxies, so they still require explicit `lazy_load`, a declared gateway proxy, or future configuration-aware declarations.
 
 ### Subagent Tool Proxy
 
@@ -376,23 +382,22 @@ The local Pi installation contains a hot patch adding `request to .* failed` to 
 
 ### Immediate Activation and Soak
 
-1. Run `/reload` in sessions started before `v0.4.0` was installed; fresh sessions already use the managed `v0.4.0` checkout.
+1. Upgrade the managed package setting from `v0.4.0` to `v0.5.0`, then run `/reload`.
 2. Invoke `web_search`, `workflow`, and `mcp`/`mcpScript` directly without pre-calling `lazy_load`.
-3. Watch stderr/UI diagnostics for eager-name collisions, metadata drift, or manifest drift.
+3. Watch stderr/UI diagnostics for eager-name collisions or manifest drift.
 4. Dogfood all four deferred packages across normal interactive sessions before expanding the rollout.
 
-### Recommended v0.4.1 Observability
+### Recommended v0.5.x Observability
 
-1. Add per-tool proxy status and reason to `/lazy list`, for example `web_search [tier 1 — ready]` and `workflow [tier 2 — prepareArguments]`.
-2. Measure startup latency against `v0.3.4`, prompt/schema token overhead, first-call latency, and Tier 2 retry rate.
-3. Promote `mcp` and `mcpScript` to Tier 1 only if dogfooding proves their schemas static and their first-call behavior faithful.
-4. Keep `workflow` and `workflow_control` at Tier 2 while they require `prepareArguments`.
+1. Add proxy status to `/lazy list`.
+2. Measure startup latency against `v0.3.4`, prompt/schema token overhead, and first-call guidance/retry rates.
+3. Maintain load-and-retry proxies for declared gateway tools.
 
 ### Operational Work
 
 1. Commit the pending dotfiles changes for `settings.json`, `fabric.json`, and `lazy-loader.json`.
 2. Monitor the upstream Vertex retry issue and remove the hot patch after an official release includes the fix.
-3. Preserve rollback backups through the v0.4.0 soak.
+3. Preserve rollback backups through the v0.5.0 soak.
 
 ### Deferred Work
 
@@ -416,4 +421,4 @@ The local Pi installation contains a hot patch adding `request to .* failed` to 
 
 ## Current Decision
 
-`v0.4.0` is the active stable baseline. Do not broaden proxy coverage immediately. First reload existing sessions, soak the three declared paths in normal interactive use, and measure startup/prompt/first-call costs. The next justified release is a focused `v0.4.1` for `/lazy list` tier observability and evidence-based promotion of stable MCP gateway tools; configuration-derived `mcp__*` names remain deferred until a configuration-aware design exists.
+`v0.5.0` is the active release baseline. Upgrade the managed setting, reload existing sessions, and soak the three declared proxy paths before broadening coverage. A later v0.5.x may add `/lazy list` proxy observability; configuration-derived `mcp__*` names remain deferred until a configuration-aware design exists.

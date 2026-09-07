@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { writeFileSync } from "node:fs";
 import { Type } from "typebox";
 
-import { LazyLoader, type PackageState } from "./src/loader.js";
+import { LazyLoader, type PackageLoadResult, type PackageState } from "./src/loader.js";
 import { MANIFEST } from "./src/manifest.js";
 import { getUserSettingsPath, pinPackageInSettingsFile } from "./src/settings.js";
 import {
@@ -11,10 +11,7 @@ import {
 } from "./src/command-config.js";
 import { formatStartupDescription } from "./src/command-presentation.js";
 import { registerToolProxies } from "./src/tool-proxy.js";
-import {
-  readToolCache,
-  buildLazyLoadGuidance,
-} from "./src/tool-cache.js";
+import { readToolCache } from "./src/tool-cache.js";
 
 function formatStatus(status: PackageState["status"]): string {
   switch (status) {
@@ -301,22 +298,14 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   });
 
   // 3. Register strict TypeBox tool: lazy_load
-  const deferredStates = loader.getAllStates().filter((s) => s.status === "deferred");
-  const guidance = buildLazyLoadGuidance(
-    deferredStates.map((s) => ({ name: s.manifest.name, capability: s.manifest.capability })),
-    toolCache
-  );
-
   pi.registerTool({
     name: "lazy_load",
     label: "Lazy Load",
-    description: guidance.description,
-    promptSnippet: guidance.promptSnippet,
-    promptGuidelines: guidance.promptGuidelines,
+    description: "Load a deferred Pi extension package on demand.",
     parameters: Type.Object(
       {
         package: Type.String({
-          description: guidance.parameterDescription,
+          description: "Package name or source to load",
         }),
       },
       { additionalProperties: false }
@@ -341,12 +330,16 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
         content: [{ type: "text", text: `Loading deferred package ${params.package}...` }],
         details: {},
       });
-      const result = await loader.loadPackage(params.package);
-      // Refresh Fabric's captured catalog, then keep newly registered tools off
-      // the native path during this same turn. Non-Fabric sessions retain Pi's
-      // normal behavior where dynamic tools become active immediately.
-      const toolsAfter = (pi.getAllTools?.() ?? []).map((t: any) => t.name);
-      if (fabricActive) pi.setActiveTools(activeBefore);
+
+      let result!: PackageLoadResult;
+      let toolsAfter: string[] = [];
+      try {
+        result = await loader.loadPackage(params.package);
+        // Let Fabric observe newly registered tools before restoring the native active set.
+        toolsAfter = (pi.getAllTools?.() ?? []).map((t: any) => t.name);
+      } finally {
+        if (fabricActive) pi.setActiveTools?.(activeBefore);
+      }
 
       if (report) {
         report.fabricPresentAfter = toolsAfter.includes("fabric_exec");
@@ -377,11 +370,14 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
         };
       }
 
-      const msg = result.alreadyLoaded
+      let msg = result.alreadyLoaded
         ? `Package "${result.package}" is already loaded.`
         : `Successfully loaded package "${result.package}" in ${result.loadMs}ms. New tools: ${
             result.newTools?.length ? result.newTools.join(", ") : "none"
           }.`;
+      if (result.missingTools?.length) {
+        msg += ` Warning: Declared tools not registered: ${result.missingTools.join(", ")}.`;
+      }
 
       return {
         content: [{ type: "text", text: msg }],
@@ -391,6 +387,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
           source: result.source,
           loadMs: result.loadMs,
           newTools: result.newTools,
+          missingTools: result.missingTools,
           alreadyLoaded: result.alreadyLoaded,
         },
       };

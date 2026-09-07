@@ -99,20 +99,16 @@
     "capability": "Web search, URL fetching, repo cloning, and PDF extraction",
     "tools": [
       {
-        "name": "fetch_content",
-        "faithful": true
+        "name": "fetch_content"
       },
       {
-        "name": "get_search_content",
-        "faithful": true
+        "name": "get_search_content"
       },
       {
-        "name": "source_check",
-        "faithful": true
+        "name": "source_check"
       },
       {
-        "name": "web_search",
-        "faithful": true
+        "name": "web_search"
       }
     ]
   },

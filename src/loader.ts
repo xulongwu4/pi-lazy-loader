@@ -12,8 +12,8 @@ import * as typeboxCompile from "typebox/compile";
 import * as typeboxValue from "typebox/value";
 
 import { MANIFEST, type ManifestEntry, findManifestEntry } from "./manifest.js";
-import { getUserAgentDir, resolvePackageEntries, resolvePackageRoot } from "./resolver.js";
-import { computePackageFingerprint, updateCachedPackageTools } from "./tool-cache.js";
+import { getUserAgentDir, resolvePackageEntries } from "./resolver.js";
+import { updateCachedPackageTools, type CachedTool } from "./tool-cache.js";
 import {
   type CommandDescriptionContext,
   formatPostLoadDescription,
@@ -34,6 +34,7 @@ export interface PackageState {
   error?: string;
   loadedEntries: string[];
   newTools: string[];
+  missingTools: string[];
   loadMs?: number;
   loadPromise?: Promise<PackageLoadResult> | null;
 }
@@ -46,6 +47,7 @@ export interface PackageLoadResult {
   alreadyLoaded?: boolean;
   loadMs?: number;
   newTools?: string[];
+  missingTools?: string[];
   entries?: string[];
   error?: string;
 }
@@ -101,7 +103,6 @@ export class LazyLoader {
   private capturedCommands = new Map<string, Map<string, any>>();
   private reservedTools = new Map<string, Set<string>>();
   private protectedTools = new Map<string, Set<string>>();
-  private capturedTools = new Map<string, Map<string, any>>();
   private partialExtensionPackages = new Set<string>();
 
   private getCapturedCommand(packageName: string, commandName: string): any {
@@ -131,6 +132,7 @@ export class LazyLoader {
         status: "deferred",
         loadedEntries: [],
         newTools: [],
+        missingTools: [],
       });
     }
     if (syncSettings) this.syncConfiguredEager();
@@ -231,11 +233,6 @@ export class LazyLoader {
     names.add(toolName);
   }
 
-  getCapturedTool(identifier: string, toolName: string): any | undefined {
-    const manifest = findManifestEntry(identifier);
-    return manifest ? this.capturedTools.get(manifest.name)?.get(toolName) : undefined;
-  }
-
   isCommandCaptured(identifier: string, commandName: string): boolean {
     const manifest = findManifestEntry(identifier);
     if (!manifest) return false;
@@ -299,6 +296,7 @@ export class LazyLoader {
         status: "deferred",
         loadedEntries: [],
         newTools: [],
+        missingTools: [],
       };
       this.states.set(manifest.name, pkgState);
     }
@@ -312,6 +310,7 @@ export class LazyLoader {
         package: manifest.name,
         source: manifest.source,
         newTools: pkgState.newTools,
+        missingTools: pkgState.missingTools.length > 0 ? pkgState.missingTools : undefined,
         entries: pkgState.loadedEntries,
         loadMs: pkgState.loadMs,
       };
@@ -385,15 +384,18 @@ export class LazyLoader {
           this.pi.registerCommand(name, committedOptions);
         }
 
-        // Capture reserved definitions only after every entry and lifecycle replay succeeds.
-        // Each startup stub publishes its own real definition after its per-tool validation.
-        if (stagedTools.size > 0) {
-          let captured = this.capturedTools.get(manifest.name);
-          if (!captured) {
-            captured = new Map<string, any>();
-            this.capturedTools.set(manifest.name, captured);
+        // Commit staged reserved real tools so they replace proxies.
+        for (const tool of stagedTools.values()) this.pi.registerTool(tool);
+
+        // Track missing declared tools
+        const reserved = this.reservedTools.get(manifest.name);
+        const missingTools: string[] = [];
+        if (reserved) {
+          for (const toolName of reserved) {
+            if (!stagedTools.has(toolName)) {
+              missingTools.push(toolName);
+            }
           }
-          for (const [name, tool] of stagedTools) captured.set(name, tool);
         }
 
         const toolsAfter = (this.pi?.getAllTools?.() ?? []).map((t: any) => t.name);
@@ -403,18 +405,28 @@ export class LazyLoader {
         pkgState.status = "loaded";
         pkgState.loadedEntries = newlyLoaded;
         pkgState.newTools = finalTools;
+        pkgState.missingTools = missingTools;
         pkgState.loadMs = Date.now() - t0;
         pkgState.error = undefined;
 
-        try {
-          const pkgRoot = resolvePackageRoot(manifest.source, this.agentDir);
-          const fingerprint = computePackageFingerprint(pkgRoot, entries);
-          const toolsToCache = observedTools.size > 0
-            ? Array.from(observedTools.values())
-            : diffTools;
-          updateCachedPackageTools(this.agentDir, manifest.name, fingerprint, toolsToCache);
-        } catch (cacheErr: any) {
-          console.error(`[pi-lazy-loader] Failed to cache tools for "${manifest.name}": ${cacheErr?.message ?? cacheErr}`);
+        // Cache advisory metadata for manifest-declared proxy tools only
+        if (manifest.tools?.length) {
+          try {
+            const declaredNames = new Set(manifest.tools.map((t) => t.name));
+            const toolsToCache: CachedTool[] = [];
+            for (const name of declaredNames) {
+              const tool = stagedTools.get(name) ?? observedTools.get(name);
+              if (tool) {
+                toolsToCache.push({
+                  name,
+                  description: typeof tool.description === "string" ? tool.description : undefined,
+                });
+              }
+            }
+            updateCachedPackageTools(this.agentDir, manifest.name, toolsToCache);
+          } catch (cacheErr: any) {
+            console.error(`[pi-lazy-loader] Failed to cache tools for "${manifest.name}": ${cacheErr?.message ?? cacheErr}`);
+          }
         }
 
         return {
@@ -424,6 +436,7 @@ export class LazyLoader {
           package: manifest.name,
           source: manifest.source,
           newTools: finalTools,
+          missingTools: missingTools.length > 0 ? missingTools : undefined,
           entries,
           loadMs: pkgState.loadMs,
         };
