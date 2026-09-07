@@ -3,11 +3,11 @@
 **Updated:** 2026-09-05
 **Repository:** <https://github.com/xulongwu4/pi-lazy-loader>  
 **Released version:** `v0.4.0`
-**Release commit:** tag `v0.4.0`
+**Release commit:** `e9f917f`
 
 ## Executive Status
 
-`pi-lazy-loader` is implemented, released, installed, and active in production configuration. The repository working tree was clean before this document was added; `main`, `origin/main`, and annotated tag `v0.3.0` all point to the verified release history.
+`pi-lazy-loader` v0.4.0 is implemented, reviewed, released, pushed, and installed in the production configuration. `main`, `origin/main`, and annotated tag `v0.4.0` point to commit `e9f917f`. Sessions started before installation require `/reload`; fresh child-process probes used the managed checkout successfully.
 
 The loader currently supports three complementary lazy-loading paths:
 
@@ -37,7 +37,7 @@ The validated production configuration defers four extension packages while keep
 | `v0.3.2` | `05a88c6` | Tool metadata capture harvest, JSON serialization safety, Pi ABI fingerprinting, cache v2 format |
 | `v0.3.3` | `b304e11` | Managed-install Pi ABI fallback through the running CLI entrypoint |
 | `v0.3.4` | `36db2d4` | Resolve the symlinked Pi CLI entrypoint before walking to its package metadata |
-| `v0.4.0` | tag `v0.4.0` | Two-tier real-name tool proxies with faithful forwarding and announce-and-retry fallback |
+| `v0.4.0` | `e9f917f` | Two-tier real-name tool proxies with faithful forwarding and announce-and-retry fallback |
 
 ## Phase Status
 
@@ -165,6 +165,22 @@ After loading, the result reports package name, source, duration, new tool names
 
 The full manifest and user command configuration are not injected into the LLM prompt.
 
+### Direct Tool Proxies
+
+Declared tool names are registered during `session_start`, after Pi action methods become available and before the first model turn.
+
+| Package | Tool | Tier | First invocation |
+|---|---|---:|---|
+| `pi-web-access` | `web_search`, `fetch_content`, `get_search_content`, `source_check` | 1 | Load and execute the original call |
+| `@quintinshaw/pi-dynamic-workflows` | `workflow`, `workflow_control` | 2 | Load only; return `executed: false` and the retry target |
+| `pi-mcp-adapter` | `mcp`, `mcpScript` | 2 | Load only; return `executed: false` and the retry target |
+
+Tier 1 requires an explicit faithful declaration, a current complete cache entry, and `hasPrepareArguments: false`. All five Pi execution arguments (`toolCallId`, `params`, `signal`, `onUpdate`, `ctx`) are forwarded to the captured real definition. Tier 2 uses a permissive schema, never echoes caller arguments, and makes non-execution explicit.
+
+Reserved registrations are captured after successful package initialization but are not globally published. Each stub publishes only its requested definition after per-tool validation. This prevents a valid sibling call from bypassing another tool's drift guard. Failed loads leave stubs intact; eager-name collisions remain protected when sibling tools later load the package.
+
+Configuration-derived `mcp__*` tools are intentionally outside the initial static rollout.
+
 ### Slash-Command Proxies
 
 Built-in command declarations:
@@ -236,6 +252,8 @@ Current release verification includes:
 - Staged atomic failure and duplicate registration tests.
 - Command readiness and provenance formatting tests.
 - Exact package-file allowlist and clean packed consumer install.
+- v0.3.1 cache/guidance, v0.3.2 metadata/serialization, and v0.4.0 two-tier proxy regression suites.
+- Tier selection, concurrent same-call forwarding, all-five-argument identity, Tier 2 non-execution/privacy, per-tool publication, drift guards, failed-load preservation, and eager collision protection.
 
 The final verification mutation-tested five essential behaviors by deliberately breaking them; every mutation was caught:
 
@@ -264,6 +282,14 @@ Production configuration was also smoke-tested after installing v0.3.0:
 duplicates=none
 ```
 
+v0.4.0 fresh-process evidence:
+
+- Non-Fabric direct `web_search`, with no `lazy_load`, loaded `pi-web-access` and returned a real result on the original call.
+- Fabric `fabric_exec -> extensions.web_search`, with no `lazy_load`, returned a real result on the original call.
+- Direct `workflow` produced exactly one observed `workflow` call, loaded the package, reported `executed: false`, and did not execute before retry.
+- Managed v0.3.4 metadata harvest fingerprinted the live Pi ABI as `0.85.0`; earlier `unknown` fingerprints led to the symlink-aware resolver fix.
+- `openai-codex/gpt-5.6-sol` issued three high-severity race/bypass findings during v0.4.0 review; all received behavioral regressions, and the final verdict was `APPROVE`.
+
 ### Performance
 
 Original Phase 0 baseline:
@@ -282,7 +308,7 @@ The first release-evidence run measured approximately **0.667 s** median saving.
 
 ### Packaging
 
-The v0.3.0 package allowlist contains exactly 11 runtime files:
+The v0.4.0 package allowlist contains exactly 13 runtime files:
 
 ```text
 README.md
@@ -296,35 +322,25 @@ src/loader.ts
 src/manifest.ts
 src/resolver.ts
 src/settings.ts
+src/tool-cache.ts
+src/tool-proxy.ts
 ```
 
 Clean install includes `jiti` and zero duplicate `@earendil-works` Pi peer packages.
 
 ## Known Limitations
 
-### Eager Command Readiness Display
-
-When a package has command declarations but is configured eagerly, the real commands work and are attributed to the real package. However, `/lazy list` may currently display those commands as `missing` because readiness checks the loader's captured-command map, which eager commands bypass.
-
-Expected future display:
-
-```text
-/mcp [ready (eager)]
-```
-
 ### Partial `extensions` Arrays
 
-The loader treats any non-empty `extensions` array as eager for the entire package. If a partial array excludes the entry that registers a declared command, no proxy is created and the command may be missing.
-
-Use either fully eager package configuration or exactly `"extensions": []` for command-proxied packages.
+The loader treats any non-empty `extensions` array as eager for the entire package. If a partial array excludes the entry that registers a declared command, no proxy is created and the command may be missing. v0.3.1 now emits a startup diagnostic rather than failing silently, but does not auto-correct the setting. Use either fully eager package configuration or exactly `"extensions": []` for proxied packages.
 
 ### Global Settings Scope
 
 The loader reads global agent-directory settings only. It does not merge project-level `.pi/settings.json` package overrides. Project overrides can therefore disagree with proxy registration.
 
-### LLM Capability Discovery
+### Tool Proxy Coverage
 
-The LLM sees four hardcoded intent mappings in `lazy_load`; it does not receive the complete manifest or dynamically generated capability guidance. Missing tools outside those mappings may not trigger the correct package load.
+Direct invocation covers the eight statically declared tool names above. Configuration-derived `mcp__*` tools are not registered from cached names automatically, so they still require `lazy_load`, a gateway tool, or future explicit configuration-aware declarations. Tier 2 costs one additional model turn by design.
 
 ### Subagent Tool Proxy
 
@@ -358,25 +374,32 @@ The local Pi installation contains a hot patch adding `request to .* failed` to 
 
 ## Remaining Work
 
-### Recommended v0.3.1 Fixes
+### Immediate Activation and Soak
 
-1. Correct `/lazy list` readiness for eagerly loaded real commands.
-2. Detect or explicitly reject partial non-empty `extensions` filters for command-proxied packages.
-3. Generate `lazy_load` capability guidance from manifest data instead of maintaining four hardcoded mappings.
+1. Run `/reload` in sessions started before `v0.4.0` was installed; fresh sessions already use the managed `v0.4.0` checkout.
+2. Invoke `web_search`, `workflow`, and `mcp`/`mcpScript` directly without pre-calling `lazy_load`.
+3. Watch stderr/UI diagnostics for eager-name collisions, metadata drift, or manifest drift.
+4. Dogfood all four deferred packages across normal interactive sessions before expanding the rollout.
+
+### Recommended v0.4.1 Observability
+
+1. Add per-tool proxy status and reason to `/lazy list`, for example `web_search [tier 1 — ready]` and `workflow [tier 2 — prepareArguments]`.
+2. Measure startup latency against `v0.3.4`, prompt/schema token overhead, first-call latency, and Tier 2 retry rate.
+3. Promote `mcp` and `mcpScript` to Tier 1 only if dogfooding proves their schemas static and their first-call behavior faithful.
+4. Keep `workflow` and `workflow_control` at Tier 2 while they require `prepareArguments`.
 
 ### Operational Work
 
 1. Commit the pending dotfiles changes for `settings.json`, `fabric.json`, and `lazy-loader.json`.
-2. Dogfood all four deferred packages across normal interactive sessions.
-3. Monitor the upstream Vertex retry issue and remove the hot patch after an official release includes the fix.
-4. Preserve existing rollback backups until v0.3.0 has completed a longer production trial.
+2. Monitor the upstream Vertex retry issue and remove the hot patch after an official release includes the fix.
+3. Preserve rollback backups through the v0.4.0 soak.
 
 ### Deferred Work
 
+- Configuration-derived `mcp__*` tool proxies require explicit configuration-aware declarations; do not expose cached names automatically.
 - Native delegated `sourceInfo` requires an upstream Pi API.
 - Project-aware effective settings require a supported merged-settings seam.
-- Additional command proxies require individual lifecycle/TUI proof.
-- Do not resume model-selected tool proxies until the unknown-nonce subagent acceptance test passes.
+- Additional command or tool proxies require individual lifecycle/TUI proof.
 
 ## Key Documentation
 
@@ -393,4 +416,4 @@ The local Pi installation contains a hot patch adding `request to .* failed` to 
 
 ## Current Decision
 
-`v0.3.0` is the active stable baseline. No further broad lazy-loading phase is planned. The next justified release is a focused `v0.3.1` addressing eager command readiness, partial extension filters, and manifest-derived LLM guidance, followed by continued dogfooding rather than additional abstractions.
+`v0.4.0` is the active stable baseline. Do not broaden proxy coverage immediately. First reload existing sessions, soak the three declared paths in normal interactive use, and measure startup/prompt/first-call costs. The next justified release is a focused `v0.4.1` for `/lazy list` tier observability and evidence-based promotion of stable MCP gateway tools; configuration-derived `mcp__*` names remain deferred until a configuration-aware design exists.
