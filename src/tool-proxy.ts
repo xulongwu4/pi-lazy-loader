@@ -1,8 +1,8 @@
 import { Type } from "typebox";
 
-import type { ManifestEntry } from "./manifest.js";
+import type { PackageDefinition } from "./package.js";
 import type { LazyLoader, PackageLoadResult } from "./loader.js";
-import type { ToolCacheData } from "./tool-cache.js";
+import type { LazyLoaderCache } from "./cache.js";
 
 export function formatProxyGuidance(packageName: string, toolName: string): string {
   return `This deferred proxy loads package "${packageName}" without executing "${toolName}". After loading completes, call "${toolName}" again using its loaded schema.`;
@@ -25,13 +25,13 @@ async function loadForProxy(pi: any, loader: LazyLoader, packageName: string): P
   }
 }
 
-function manifestDrift(packageName: string, toolName: string) {
+function cacheDrift(packageName: string, toolName: string) {
   return {
     content: [{
       type: "text",
-      text: `Package "${packageName}" loaded but did not register declared tool "${toolName}". Manifest is stale.`,
+      text: `Package "${packageName}" loaded but did not register cached tool "${toolName}". The lazy-loader cache is stale.`,
     }],
-    details: { ok: false, executed: false, package: packageName, tool: toolName, manifestDrift: true },
+    details: { ok: false, executed: false, package: packageName, tool: toolName, cacheDrift: true },
     isError: true,
   };
 }
@@ -48,23 +48,21 @@ function loadFailure(packageName: string, toolName: string, error?: string) {
   };
 }
 
-/** Register real-name load-and-retry proxies for declared tools of deferred packages. */
+/** Register real-name load-and-retry proxies for cached tools of deferred packages. */
 export function registerToolProxies(
   pi: any,
   loader: LazyLoader,
-  entries: ManifestEntry[],
-  cache: ToolCacheData
+  entries: PackageDefinition[],
+  cache: LazyLoaderCache
 ): string[] {
   const diagnostics: string[] = [];
   const occupied = new Set((pi.getAllTools?.() ?? []).map((tool: any) => tool.name));
 
   for (const entry of entries) {
-    if (!entry.tools?.length || loader.getPackageState(entry.name)?.status !== "deferred") continue;
+    if (loader.getPackageState(entry.name)?.status !== "deferred") continue;
 
-    const cachedPackage = cache.packages[entry.name];
-    const cachedByName = new Map(cachedPackage?.tools.map((tool) => [tool.name, tool]) ?? []);
-
-    for (const declaration of entry.tools) {
+    const cachedTools = cache.packages[entry.name]?.tools ?? [];
+    for (const declaration of cachedTools) {
       if (occupied.has(declaration.name)) {
         const diagnostic = `Tool proxy "${declaration.name}" for "${entry.name}" was skipped because that name is already registered`;
         diagnostics.push(diagnostic);
@@ -74,8 +72,7 @@ export function registerToolProxies(
       }
 
       loader.reserveTool(entry.name, declaration.name);
-      const cached = cachedByName.get(declaration.name);
-      const baseDesc = cached?.description?.trim() || entry.capability;
+      const baseDesc = declaration.description?.trim() || `Tools provided by ${entry.name}`;
       const guidance = formatProxyGuidance(entry.name, declaration.name);
       const description = formatProxyDescription(baseDesc, entry.name, declaration.name);
 
@@ -91,7 +88,7 @@ export function registerToolProxies(
           }
           if (state?.status === "loaded") {
             if (state.missingTools.includes(declaration.name)) {
-              return manifestDrift(entry.name, declaration.name);
+              return cacheDrift(entry.name, declaration.name);
             }
             return {
               content: [{ type: "text", text: `Package "${entry.name}" is loaded. Call "${declaration.name}" again using its loaded schema.` }],
@@ -108,7 +105,7 @@ export function registerToolProxies(
             return loadFailure(entry.name, declaration.name, loaded.error);
           }
           if (loaded.missingTools?.includes(declaration.name)) {
-            return manifestDrift(entry.name, declaration.name);
+            return cacheDrift(entry.name, declaration.name);
           }
 
           return {

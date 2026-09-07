@@ -2,11 +2,10 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import {
-  MANIFEST,
-  type ManifestEntry,
+  type PackageDefinition,
   type CommandProxyDeclaration,
-  findManifestEntry,
-} from "./manifest.js";
+  findPackageDefinition,
+} from "./package.js";
 import { getUserAgentDir } from "./resolver.js";
 import {
   type CommandDescriptionContext,
@@ -49,6 +48,10 @@ function isValidCommandName(name: unknown): name is string {
   return typeof name === "string" && COMMAND_NAME_REGEX.test(name);
 }
 
+function isRegisteredCommandName(name: unknown): name is string {
+  return typeof name === "string" && name.length > 0 && !/[\x00-\x1f\x7f]/.test(name);
+}
+
 function isValidDescription(desc: unknown): desc is string {
   if (typeof desc !== "string") return false;
   if (desc.length === 0 || desc.length > MAX_DESCRIPTION_LENGTH) return false;
@@ -65,12 +68,13 @@ export interface ValidatedBuiltinCommands {
   builtinMap: Map<string, Map<string, { description?: string }>>;
   packageToSource: Map<string, string>;
   diagnostics: string[];
+  packages: PackageDefinition[];
 }
 
 /**
- * Validate and normalize command declarations in manifest entries once.
+ * Validate and normalize command declarations in package definitions once.
  */
-export function normalizeManifestCommands(entries: ManifestEntry[]): ValidatedBuiltinCommands {
+export function normalizePackageCommands(entries: PackageDefinition[]): ValidatedBuiltinCommands {
   const diagnostics: string[] = [];
   const builtinMap = new Map<string, Map<string, { description?: string }>>();
   const packageToSource = new Map<string, string>();
@@ -93,15 +97,11 @@ export function normalizeManifestCommands(entries: ManifestEntry[]): ValidatedBu
         continue;
       }
 
-      if (!isValidCommandName(cmd.name)) {
+      if (!isRegisteredCommandName(cmd.name)) {
         diagnostics.push(`Package "${entry.name}" has invalid command name: "${cmd.name}"`);
         continue;
       }
 
-      if (cmd.description !== undefined && !isValidDescription(cmd.description)) {
-        diagnostics.push(`Package "${entry.name}" command "${cmd.name}" has invalid description`);
-        continue;
-      }
 
       if (seenInPackage.has(cmd.name)) {
         diagnostics.push(`Package "${entry.name}" has duplicate command declaration for "${cmd.name}"`);
@@ -125,20 +125,23 @@ export function normalizeManifestCommands(entries: ManifestEntry[]): ValidatedBu
     }
   }
 
-  return { builtinMap, packageToSource, diagnostics };
+  return { builtinMap, packageToSource, diagnostics, packages: entries };
 }
 
 /**
- * Validate command declarations in manifest entries.
+ * Validate command declarations in package definitions.
  */
-export function validateManifestCommands(entries: ManifestEntry[]): string[] {
-  return normalizeManifestCommands(entries).diagnostics;
+export function validatePackageCommands(entries: PackageDefinition[]): string[] {
+  return normalizePackageCommands(entries).diagnostics;
 }
 
 /**
  * Validate the structure of user command configuration.
  */
-export function validateUserConfig(raw: unknown): { config?: UserCommandConfig; diagnostics: string[] } {
+export function validateUserConfig(
+  raw: unknown,
+  packages: PackageDefinition[] = []
+): { config?: UserCommandConfig; diagnostics: string[] } {
   const diagnostics: string[] = [];
 
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -176,7 +179,7 @@ export function validateUserConfig(raw: unknown): { config?: UserCommandConfig; 
   const allowedPackageKeys = new Set(["targetLabel", "commands"]);
 
   for (const [pkgKey, pkgVal] of Object.entries(obj.packages)) {
-    const manifest = findManifestEntry(pkgKey);
+    const manifest = findPackageDefinition(packages, pkgKey);
     if (!manifest) {
       diagnostics.push(`Unknown package "${pkgKey}" in user command configuration`);
       continue;
@@ -269,16 +272,16 @@ export function validateUserConfig(raw: unknown): { config?: UserCommandConfig; 
 }
 
 /**
- * Merge built-in manifest commands with optional user configuration.
+ * Merge cached package commands with optional user configuration.
  * Resolves package aliases, normalizes commands, collapses duplicates, detects conflicts.
  */
 export function mergeCommandDefinitions(
-  manifestEntries: ManifestEntry[] | ValidatedBuiltinCommands,
+  packageEntries: PackageDefinition[] | ValidatedBuiltinCommands,
   userConfig?: UserCommandConfig
 ): CommandConfigResult {
-  const validatedBuiltins = Array.isArray(manifestEntries)
-    ? normalizeManifestCommands(manifestEntries)
-    : manifestEntries;
+  const validatedBuiltins = Array.isArray(packageEntries)
+    ? normalizePackageCommands(packageEntries)
+    : packageEntries;
 
   const diagnostics: string[] = [...validatedBuiltins.diagnostics];
   const { builtinMap, packageToSource } = validatedBuiltins;
@@ -295,7 +298,7 @@ export function mergeCommandDefinitions(
 
   if (userConfig?.packages) {
     for (const [pkgKey, pkgVal] of Object.entries(userConfig.packages)) {
-      const manifest = findManifestEntry(pkgKey);
+      const manifest = findPackageDefinition(validatedBuiltins.packages, pkgKey);
       if (!manifest) continue; // Already diagnosed in validation
 
       const canonicalName = manifest.name;
@@ -334,7 +337,7 @@ export function mergeCommandDefinitions(
     Map<string, { description?: string; targetLabel?: string }>
   >();
 
-  // Initialize with built-ins
+  // Initialize with cached declarations
   for (const [pkgName, cmds] of builtinMap.entries()) {
     const map = new Map<string, { description?: string; targetLabel?: string }>();
     for (const [cmdName, data] of cmds.entries()) {
@@ -374,7 +377,7 @@ export function mergeCommandDefinitions(
           ? Array.from(userCmdData.descriptions)[0]
           : undefined;
 
-      // User non-empty description overrides built-in; omitted description preserves built-in
+      // User non-empty description overrides cache; omitted description preserves cache
       const finalDesc = userSuppliedDesc ?? existingBuiltin?.description;
       pkgCmds.set(cmdName, {
         description: finalDesc,
@@ -438,23 +441,23 @@ export function mergeCommandDefinitions(
 export function loadCommandConfig(options?: {
   agentDir?: string;
   configPath?: string;
-  manifest?: ManifestEntry[];
+  packages?: PackageDefinition[];
 }): CommandConfigResult {
   const agentDir = options?.agentDir ?? getUserAgentDir();
   const filePath = options?.configPath ?? join(agentDir, "lazy-loader.json");
-  const manifest = options?.manifest ?? MANIFEST;
+  const packages = options?.packages ?? [];
 
   if (!existsSync(filePath)) {
-    return mergeCommandDefinitions(manifest, undefined);
+    return mergeCommandDefinitions(packages, undefined);
   }
 
   try {
     const st = statSync(filePath);
     if (st.size > MAX_CONFIG_FILE_SIZE) {
       return {
-        definitions: mergeCommandDefinitions(manifest, undefined).definitions,
+        definitions: mergeCommandDefinitions(packages, undefined).definitions,
         diagnostics: [
-          `User command config file "${filePath}" exceeds 64 KiB limit (${st.size} bytes); using built-in commands only`,
+          `User command config file "${filePath}" exceeds 64 KiB limit (${st.size} bytes); using cached commands only`,
         ],
       };
     }
@@ -465,16 +468,16 @@ export function loadCommandConfig(options?: {
       raw = JSON.parse(content);
     } catch (parseErr: any) {
       return {
-        definitions: mergeCommandDefinitions(manifest, undefined).definitions,
+        definitions: mergeCommandDefinitions(packages, undefined).definitions,
         diagnostics: [
           `Failed to parse user command config at "${filePath}": ${parseErr?.message ?? parseErr}`,
         ],
       };
     }
 
-    const { config, diagnostics: valDiagnostics } = validateUserConfig(raw);
+    const { config, diagnostics: valDiagnostics } = validateUserConfig(raw, packages);
     const { definitions, diagnostics: mergeDiagnostics } = mergeCommandDefinitions(
-      manifest,
+      packages,
       config
     );
 
@@ -484,7 +487,7 @@ export function loadCommandConfig(options?: {
     };
   } catch (err: any) {
     return {
-      definitions: mergeCommandDefinitions(manifest, undefined).definitions,
+      definitions: mergeCommandDefinitions(packages, undefined).definitions,
       diagnostics: [
         `Error reading user command config at "${filePath}": ${err?.message ?? err}`,
       ],

@@ -1,6 +1,6 @@
 # pi-lazy-loader
 
-Deferred on-demand extension loader for Pi coding agent. It can load ten profiled packages mid-session without `/reload`; the validated Fabric-compatible configuration currently defers web access, MCP, dynamic workflows, and the token-burden command.
+General-purpose deferred extension loader for Pi coding agent. Any installed package configured with `"extensions": []` can be loaded mid-session without `/reload`; command and tool proxies are discovered from one persistent cache.
 
 ## Startup Overhead & Performance Impact
 
@@ -28,15 +28,15 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.5.0
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.6.0
 ```
 
-Keep skills, prompts, and themes eager while filtering only the four validated extension entries in `~/.pi/agent/settings.json`:
+Keep skills, prompts, and themes eager while filtering the extension entry of any package you want to defer in `~/.pi/agent/settings.json`:
 
 ```json
 {
   "packages": [
-    "git:github.com/xulongwu4/pi-lazy-loader@v0.5.0",
+    "git:github.com/xulongwu4/pi-lazy-loader@v0.6.0",
     "npm:pi-fabric",
     { "source": "npm:@quintinshaw/pi-dynamic-workflows", "extensions": [] },
     { "source": "npm:pi-token-burden", "extensions": [] },
@@ -56,7 +56,9 @@ When Fabric captures extension tools, keep the loader prompt-visible in `~/.pi/a
 }
 ```
 
-Other package entries remain unchanged and eager.
+Other package entries remain unchanged and eager. Deferred packages are discovered directly from these settings entries; there is no fixed package manifest.
+
+The unified cache is stored at `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`. Each package entry contains `commands` and `tools`. A deferred package without an entry is loaded eagerly once to populate both lists. Later sessions register proxies from the cached names and descriptions. Every successful package load refreshes the entry with all commands and tools exposed by that package.
 
 ---
 
@@ -84,7 +86,7 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 
 Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep `lazy_load` visible alongside `fabric_exec`; after each load the loader refreshes Fabric's catalog and restores that two-tool active set, preventing same-turn policy leaks.
 
-The v0.5.0 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
+The v0.6.0 configuration defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
 
 ### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
@@ -95,12 +97,12 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
 
 ### Slash Commands
 
-- Command Proxies: Built-in stubs for deferred packages (`/mcp`, `/pi-mcp`, `/mcp-auth` from `pi-mcp-adapter`; `/token-burden` from `pi-token-burden`), plus user-declared proxies from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json`.
+- Command Proxies: Cached stubs for every command exposed by a deferred package, plus optional user overrides from `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json`.
   - Registered only when the target package is deferred (`"extensions": []`).
   - Pre-load completions return `null` without loading the package.
   - First invocation executes the target factory once, stages and atomically commits registrations, forwards decorated description with delegated provenance (`[target: <pkg>; via pi-lazy-loader]`), and invokes the captured real handler for the in-flight call.
   - Replacement within Pi's command map creates no numeric `:1` suffixes.
-- `/lazy list`: Show status (`deferred`, `loading`, `loaded`, `failed`), measured startup cost, capabilities, and per-command readiness (`deferred`, `ready`, `missing`) for all packages.
+- `/lazy list`: Show status (`deferred`, `loading`, `loaded`, `failed`), discovered tools, and per-command readiness (`deferred`, `ready`, `missing`) for configured deferred packages.
 - `/lazy add <package>`: Dynamically load a package extension into the current session.
   - Idempotent: Subsequent calls return immediately.
   - Concurrent-safe: In-flight calls share a single promise.
@@ -114,7 +116,7 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
 
 ## User Configuration (`lazy-loader.json`)
 
-To add or customize slash-command proxies for packages known to `manifest.json`, place a `lazy-loader.json` file in the active agent directory:
+To add or customize slash-command proxies for packages configured with `"extensions": []`, place a `lazy-loader.json` file in the active agent directory:
 
 ```text
 ${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json
@@ -146,8 +148,8 @@ A JSON Schema (`lazy-loader.schema.json`) ships with the package and validates t
 
 - **Version**: `version: 1` is required.
 - **`$schema`**: Optional string; ignored at runtime and exempt from unknown-property checks.
-- **Grouped packages**: `packages` is keyed by manifest package name or alias (e.g. `pi-mcp-adapter` or `npm:pi-mcp-adapter`). Keys must resolve through the built-in manifest.
-- **Command shorthand & objects**: The `commands` array accepts string shorthand (e.g. `"mcp"`) or command objects (`{ "name": "...", "description": "..." }`). String shorthand is normalized to `{ "name": "<str>" }` and preserves built-in descriptions.
+- **Grouped packages**: `packages` is keyed by a deferred package name or source alias (e.g. `pi-mcp-adapter` or `npm:pi-mcp-adapter`). Keys must resolve through `settings.json`.
+- **Command shorthand & objects**: The `commands` array accepts string shorthand (e.g. `"mcp"`) or command objects (`{ "name": "...", "description": "..." }`). String shorthand preserves the cached command description.
 - **Supplemental `targetLabel`**: An optional string per package group. It is rendered alongside the canonical package name (e.g. `pi-mcp-adapter (mcp-service)`), never replacing it.
 - **String constraints**: Command names must match `^[a-z0-9][a-z0-9-]*$` (no leading slash). Descriptions (1–240 chars) and labels (1–100 chars) reject newlines and control characters.
 - **File size limit**: The configuration file must not exceed 64 KiB.
@@ -157,7 +159,7 @@ A JSON Schema (`lazy-loader.schema.json`) ships with the package and validates t
 Configuration loading is strictly non-fatal:
 - Syntactic errors, schema violations, unknown packages, or oversized files write diagnostic warnings to `stderr` at startup and surface a notification in the UI at `session_start`. Pi startup never crashes.
 - Conflicting user declarations (e.g. differing descriptions for the same command name, or the same command name mapped to multiple packages) skip proxy registration for the conflicted name; valid declarations continue to register.
-- If `lazy-loader.json` is missing or invalid, the loader seamlessly falls back to built-in command declarations.
+- If `lazy-loader.json` is missing or invalid, the loader falls back to cached command declarations.
 
 ### Provenance and Canonical `sourceInfo` Limitation
 
@@ -201,14 +203,14 @@ Before deploying or updating:
 
 ### LLM Tools
 
-- **Direct tool proxies:** Load-and-retry startup proxies register under declared tool names for deferred packages. Their descriptions prefer cached real tool descriptions (falling back to manifest capability). Invoking a proxy loads its package without executing the requested tool, publishes the staged real tools, and returns explicit retry guidance with `loaded: true`, `executed: false`, and `retryTool`. Caller arguments are never echoed.
+- **Direct tool proxies:** Load-and-retry startup proxies register under every cached tool name for deferred packages. Their descriptions use the cached real tool descriptions. Invoking a proxy loads its package without executing the requested tool, publishes the real tools, refreshes the package cache, and returns explicit retry guidance with `loaded: true`, `executed: false`, and `retryTool`. Caller arguments are never echoed.
 - `lazy_load`: Generic on-demand package loader with a strict TypeBox schema accepting a package name or source:
   ```json
   {
     "package": "@quintinshaw/pi-dynamic-workflows"
   }
   ```
-  Dynamically loads the target package and makes its tools available in the same session. Under Fabric, the tools are captured as `extensions.*` while the native active set remains `fabric_exec` plus `lazy_load` (restored reliably via `finally`). Warns if declared tools were not registered by the package; surviving proxies in loaded state return terminal manifest drift, and failed loads return terminal reload guidance.
+  Dynamically loads the target package and makes its tools available in the same session. Under Fabric, the tools are captured as `extensions.*` while the native active set remains `fabric_exec` plus `lazy_load` (restored reliably via `finally`). Surviving stale-cache proxies return terminal drift guidance, and failed loads return terminal reload guidance.
 - **Sticky Session Failure**: If a package fails to load during a session, subsequent `lazy_load` calls fail fast without re-entering the load path. Retrying requires `/reload` or session restart.
 
 ---
@@ -222,8 +224,8 @@ bun checks/run-checks.ts
 ```
 
 Run `bun checks/phase4-command-checks.ts` for command-proxy capture, concurrency, repeat-call, forwarding, and error checks.
-Run `bun checks/command-proxy-checks.ts` for manifest command validation, user configuration, atomic staged-commit, multi-command capture, and packaging allowlist checks.
-Run `bun checks/v050-checks.ts` for proxy-triggered package loading, non-execution retry guidance, real-tool displacement, drift/failed terminal states, eager protection, advisory cache v3, and Fabric restoration.
+Run `bun checks/command-proxy-checks.ts` for cached command validation, user configuration, atomic staged-commit, multi-command capture, and packaging allowlist checks.
+Run `bun checks/v050-checks.ts` for arbitrary settings-package discovery, first-run cache bootstrap, all-command/tool capture, cache-driven proxies, drift/failed terminal states, eager protection, and Fabric restoration.
 
 The suite covers:
 1. **File/Directory Entry Resolution**: Validates resolution of single files, directory conventions (`llm-wiki/index.ts`), and multi-file packages (`pi-quotas` 6 entries), plus error handling.

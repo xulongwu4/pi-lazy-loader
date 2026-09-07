@@ -3,15 +3,15 @@ import { writeFileSync } from "node:fs";
 import { Type } from "typebox";
 
 import { LazyLoader, type PackageLoadResult, type PackageState } from "./src/loader.js";
-import { MANIFEST } from "./src/manifest.js";
 import { getUserSettingsPath, pinPackageInSettingsFile } from "./src/settings.js";
+import { discoverLazyPackages, getUserAgentDir } from "./src/resolver.js";
 import {
   loadCommandConfig,
   type MergedCommandDefinition,
 } from "./src/command-config.js";
 import { formatStartupDescription } from "./src/command-presentation.js";
 import { registerToolProxies } from "./src/tool-proxy.js";
-import { readToolCache } from "./src/tool-cache.js";
+import { readCache, updateCachedPackage } from "./src/cache.js";
 
 function formatStatus(status: PackageState["status"]): string {
   switch (status) {
@@ -34,7 +34,6 @@ export function formatPackageList(
 ): string {
   const lines: string[] = ["Lazy-Loadable Packages:"];
   for (const s of states) {
-    const costStr = `${s.manifest.cost.toFixed(3)}s`;
     const status = formatStatus(s.status);
     const err = s.error ? ` [ERROR: ${s.error}]` : "";
     const tools = s.newTools.length > 0 ? ` (tools: ${s.newTools.join(", ")})` : "";
@@ -51,27 +50,26 @@ export function formatPackageList(
       });
       cmds = ` (commands: ${cmdParts.join(", ")})`;
     }
-    lines.push(`  [${status}] ${s.manifest.name.padEnd(35)} cost: ${costStr.padStart(6)} | ${s.manifest.capability}${tools}${cmds}${err}`);
+    lines.push(`  [${status}] ${s.manifest.name.padEnd(35)} ${s.manifest.source}${tools}${cmds}${err}`);
   }
   return lines.join("\n");
 }
 
 export default function lazyLoaderExtension(pi: ExtensionAPI) {
-  const loader = new LazyLoader(pi);
+  const agentDir = getUserAgentDir();
+  const lazyPackages = discoverLazyPackages(agentDir);
+  const loader = new LazyLoader(pi, agentDir, false, lazyPackages);
 
-  // Load merged command proxy configurations and write diagnostics to stderr
-  const { definitions, diagnostics } = loadCommandConfig({ agentDir: loader.getAgentDir() });
-  const toolCache = readToolCache(loader.getAgentDir());
+  let cache = readCache(loader.getAgentDir());
+  const cachedPackages = lazyPackages.map((pkg) => ({
+    ...pkg,
+    commands: cache.packages[pkg.name]?.commands ?? [],
+  }));
+  const { definitions, diagnostics } = loadCommandConfig({
+    agentDir: loader.getAgentDir(),
+    packages: cachedPackages,
+  });
 
-  // Diagnose packages configured with a non-empty extensions filter that declare commands
-  const commandPackageNames = new Set(definitions.map((d) => d.packageName));
-  for (const pkgName of loader.getPartialExtensionPackages()) {
-    if (commandPackageNames.has(pkgName)) {
-      diagnostics.push(
-        `Package "${pkgName}" has a non-empty "extensions" filter in settings.json. Command proxies may be missing. Use "extensions": [] to defer or omit "extensions" for fully eager.`
-      );
-    }
-  }
 
   for (const diag of diagnostics) {
     console.error(`[pi-lazy-loader] ${diag}`);
@@ -111,16 +109,30 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   let toolProxiesRegistered = false;
 
   // 1. Eagerly capture genuine lifecycle events at startup for late replay
-  pi.on("session_start", (event: any, ctx: any) => {
+  pi.on("session_start", async (event: any, ctx: any) => {
     loader.setSessionStart(event, ctx);
-    loader.syncConfiguredEager();
+
+    // A missing cache is bootstrapped once by eagerly loading that deferred package.
+    const bootstrapDiagnostics: string[] = [];
+    for (const pkg of lazyPackages) {
+      if (Object.hasOwn(cache.packages, pkg.name)) continue;
+      const loaded = await loader.loadPackage(pkg.name);
+      if (!loaded.success) {
+        updateCachedPackage(loader.getAgentDir(), pkg.name, [], []);
+        bootstrapDiagnostics.push(`Failed to populate cache for "${pkg.name}": ${loaded.error}`);
+      }
+    }
+    for (const diagnostic of bootstrapDiagnostics) console.error(`[pi-lazy-loader] ${diagnostic}`);
+
+    cache = readCache(loader.getAgentDir());
     if (!toolProxiesRegistered) {
-      diagnostics.push(...registerToolProxies(pi, loader, MANIFEST, toolCache));
+      diagnostics.push(...registerToolProxies(pi, loader, lazyPackages, cache));
       toolProxiesRegistered = true;
     }
 
-    if (diagnostics.length > 0 && ctx.hasUI) {
-      ctx.ui.notify(`pi-lazy-loader: ${diagnostics.join("; ")}`, "warning");
+    const sessionDiagnostics = [...diagnostics, ...bootstrapDiagnostics];
+    if (sessionDiagnostics.length > 0 && ctx.hasUI) {
+      ctx.ui.notify(`pi-lazy-loader: ${sessionDiagnostics.join("; ")}`, "warning");
     }
     if (report) {
       report.sessionStartCaptured = true;
@@ -156,7 +168,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     });
   }
 
-  // 2. Register manifest-driven and user-configured command proxies for deferred packages
+  // 2. Register cache-driven and user-configured command proxies for deferred packages
   // FR-3: Reserve ALL declared commands for deferred packages before registering any proxy
   const deferredDefinitions: MergedCommandDefinition[] = [];
   const packageDefinitions = new Map<string, MergedCommandDefinition[]>();
@@ -223,7 +235,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       }
       if (parts[0] === "add" || parts[0] === "pin") {
         const pkgPrefix = parts[1] || "";
-        const matches = MANIFEST.map((m) => m.name).filter((n) => n.toLowerCase().startsWith(pkgPrefix.toLowerCase()));
+        const matches = loader.getAllStates().map((state) => state.manifest.name).filter((name) => name.toLowerCase().startsWith(pkgPrefix.toLowerCase()));
         return matches.map((name) => ({ value: `${parts[0]} ${name}`, label: name }));
       }
       return null;
@@ -376,7 +388,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
             result.newTools?.length ? result.newTools.join(", ") : "none"
           }.`;
       if (result.missingTools?.length) {
-        msg += ` Warning: Declared tools not registered: ${result.missingTools.join(", ")}.`;
+        msg += ` Warning: Cached tools not registered: ${result.missingTools.join(", ")}.`;
       }
 
       return {

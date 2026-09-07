@@ -3,10 +3,10 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { MANIFEST, findManifestEntry } from "../src/manifest.js";
-import { getUserAgentDir, resolvePackageEntries, resolvePackageRoot } from "../src/resolver.js";
+import { discoverLazyPackages, getUserAgentDir, resolvePackageEntries, resolvePackageRoot } from "../src/resolver.js";
 import { LazyLoader } from "../src/loader.js";
-import { pinPackageInSettingsFile, transformPinSettings } from "../src/settings.js";
+import { isPackageMatch, pinPackageInSettingsFile, transformPinSettings } from "../src/settings.js";
+import { readCache } from "../src/cache.js";
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -23,9 +23,10 @@ console.log("--- Check 1: File and Directory Entry Resolution ---");
 const agentDir = getUserAgentDir();
 console.log(`Agent directory: ${agentDir}`);
 
-assert(MANIFEST.length === 10, `Manifest must contain exactly 10 packages, got ${MANIFEST.length}`);
+const lazyPackages = discoverLazyPackages(agentDir);
+assert(lazyPackages.length > 0, "At least one deferred settings package must be discovered");
 
-for (const pkg of MANIFEST) {
+for (const pkg of lazyPackages) {
   const root = resolvePackageRoot(pkg.source, agentDir);
   assert(existsSync(root), `Package root does not exist for ${pkg.name}: ${root}`);
 
@@ -135,23 +136,27 @@ loader.setResourcesDiscover(
   { cwd: process.cwd() }
 );
 
-// Verify all 10 are initially in deferred state
+// Verify every settings-discovered package is initially deferred
 const initialStates = loader.getAllStates();
-assert(initialStates.length === 10, `Expected 10 initial states, got ${initialStates.length}`);
+assert(initialStates.length === lazyPackages.length, `Expected ${lazyPackages.length} initial states, got ${initialStates.length}`);
 for (const s of initialStates) {
   assert(s.status === "deferred", `Expected initial status 'deferred' for ${s.manifest.name}, got ${s.status}`);
 }
-console.log("  ✓ All 10 packages initialized in 'deferred' status");
+console.log(`  ✓ All ${lazyPackages.length} settings packages initialized in 'deferred' status`);
 
 // Reconcile eager settings without touching the real settings file.
 const eagerDir = join(tmpdir(), `pi-lazy-eager-${Date.now()}`);
 mkdirSync(eagerDir, { recursive: true });
 const eagerSettings = join(eagerDir, "settings.json");
 writeFileSync(eagerSettings, JSON.stringify({ packages: ["npm:pi-fabric", { source: "npm:pi-web-access", extensions: [] }] }));
-const marked = loader.syncConfiguredEager(eagerSettings);
+const syncLoader = new LazyLoader(mockPi, eagerDir, false, [
+  { name: "pi-fabric", source: "npm:pi-fabric" },
+  { name: "pi-web-access", source: "npm:pi-web-access" },
+]);
+const marked = syncLoader.syncConfiguredEager(eagerSettings);
 assert(marked.includes("pi-fabric"), "Configured eager pi-fabric must be marked loaded");
-assert(loader.getPackageState("pi-fabric")?.status === "loaded", "Eager pi-fabric status must be loaded");
-assert(loader.getPackageState("pi-web-access")?.status === "deferred", "Filtered pi-web-access must remain deferred");
+assert(syncLoader.getPackageState("pi-fabric")?.status === "loaded", "Eager pi-fabric status must be loaded");
+assert(syncLoader.getPackageState("pi-web-access")?.status === "deferred", "Filtered pi-web-access must remain deferred");
 rmSync(eagerDir, { recursive: true, force: true });
 console.log("  ✓ Eager settings reconcile to loaded while extensions: [] remains deferred");
 
@@ -180,8 +185,12 @@ assert(idempotentResult.alreadyLoaded === true, "Must flag alreadyLoaded: true")
 assert(idempotentResult.status === "loaded", "Status must remain 'loaded'");
 console.log("  ✓ Idempotent reload returned immediately with alreadyLoaded: true");
 
-// Test multi-entry package: pi-quotas (6 entries)
-const quotasResult = await loader.loadPackage("pi-quotas");
+// Test an explicit multi-entry package: pi-quotas (6 entries)
+const quotasLoader = new LazyLoader(mockPi, agentDir, false, [{
+  name: "pi-quotas",
+  source: "git:github.com/xulongwu4/pi-quotas",
+}]);
+const quotasResult = await quotasLoader.loadPackage("pi-quotas");
 assert(quotasResult.success, `pi-quotas multi-entry load failed: ${quotasResult.error}`);
 assert(quotasResult.entries?.length === 6, `pi-quotas must load all 6 entries, got ${quotasResult.entries?.length}`);
 console.log(`  ✓ Multi-entry package pi-quotas loaded all 6 entry points`);
@@ -199,6 +208,8 @@ console.log("Check 2 passed.\n");
 // CHECK 3: Safe Settings Pin Transform on Temp Data (Never touches real settings)
 // -----------------------------------------------------------------------------
 console.log("--- Check 3: Safe Settings Pin Transform on Temp Data ---");
+assert(!isPackageMatch({ source: "npm:@a/tools" }, "tools"), "Scoped npm packages must not match ambiguous basenames");
+assert(isPackageMatch({ source: "npm:@a/tools@1.0.0" }, "@a/tools"), "Canonical scoped npm names must match versioned sources");
 
 const tempDir = join(tmpdir(), `pi-lazy-check-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 mkdirSync(tempDir, { recursive: true });
@@ -247,7 +258,10 @@ try {
   assert(written1.customTopLevelProp === "top_level_value", "top level props must be preserved");
   console.log("  ✓ Successfully pinned pi-fabric and preserved unknown properties");
 
-  // Pin pi-quotas using alias
+  // Resolve a friendly git package name from installed package metadata, not its basename.
+  const quotasInstallDir = join(tempDir, "git", "github.com", "xulongwu4", "pi-quotas");
+  mkdirSync(quotasInstallDir, { recursive: true });
+  writeFileSync(join(quotasInstallDir, "package.json"), JSON.stringify({ name: "pi-quotas" }));
   const pinRes2 = pinPackageInSettingsFile(tempSettingsPath, "pi-quotas");
   assert(pinRes2.success, "Pinning pi-quotas failed");
 
@@ -303,14 +317,32 @@ if (process.env.PI_LAZY_SKIP_E2E === "1") {
   process.exit(0);
 }
 
-// CHECK 4: Non-interactive End-to-End Proof (Pi + Gemini + pi-fabric + fabric_exec)
+// CHECK 4: Non-interactive End-to-End Proof (missing-cache eager bootstrap)
 // -----------------------------------------------------------------------------
 console.log("--- Check 4: Non-interactive End-to-End Proof via Pi CLI ---");
 
 const reportPath = join(tmpdir(), `pi-lazy-e2e-report-${Date.now()}.json`);
+const e2eAgentDir = join(tmpdir(), `pi-lazy-e2e-agent-${Date.now()}`);
+const e2ePackageDir = join(e2eAgentDir, "npm", "node_modules", "pi-lazy-e2e-fixture");
+mkdirSync(e2ePackageDir, { recursive: true });
+writeFileSync(join(e2ePackageDir, "package.json"), JSON.stringify({
+  name: "pi-lazy-e2e-fixture",
+  type: "module",
+  pi: { extensions: ["./index.js"] },
+}));
+writeFileSync(join(e2ePackageDir, "index.js"), `export default function (pi) {
+  pi.registerTool({
+    name: "answer_42",
+    description: "Return the number 42",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    execute() { return { content: [{ type: "text", text: "42" }], details: {} }; },
+  });
+}`);
+writeFileSync(join(e2eAgentDir, "settings.json"), JSON.stringify({
+  packages: [{ source: "npm:pi-lazy-e2e-fixture", extensions: [] }],
+}));
 
-const prompt =
-  "First call the lazy_load tool with package: 'pi-fabric'. Then call the fabric_exec tool with code: return 40+2. Tell me the number it returned.";
+const prompt = "Call the answer_42 tool and tell me the number it returned.";
 
 const candidateModels = ["google/gemini-2.5-flash", "google/gemini-3.5-flash", "google/gemini-3.8-flash"];
 let proc: any;
@@ -335,6 +367,7 @@ for (const model of candidateModels) {
         PI_OFFLINE: "1",
         PI_SKIP_VERSION_CHECK: "1",
         PI_LAZY_REPORT_PATH: reportPath,
+        PI_CODING_AGENT_DIR: e2eAgentDir,
       },
       encoding: "utf-8",
       timeout: 75000,
@@ -359,42 +392,14 @@ if (!proc || proc.status !== 0) {
 console.log(`Pi response: "${piOutput}"`);
 assert(piOutput.includes("42"), `Pi response must contain '42', got: "${piOutput}"`);
 
-assert(existsSync(reportPath), `Report file was not created at ${reportPath}`);
-const e2eReport = JSON.parse(readFileSync(reportPath, "utf-8"));
+const cachedFixture = readCache(e2eAgentDir).packages["pi-lazy-e2e-fixture"];
+assert(cachedFixture?.tools.some((tool) => tool.name === "answer_42"), "eager bootstrap must populate unified cache");
 rmSync(reportPath, { force: true });
+rmSync(e2eAgentDir, { recursive: true, force: true });
 
-// Verify step by step evidence:
-console.log("E2E Report Summary:");
-console.log(`  - Tools before lazy_load: ${e2eReport.toolsBefore?.length} tools`);
-console.log(`  - fabric_exec present before: ${e2eReport.fabricPresentBefore}`);
-console.log(`  - New tools after lazy_load: ${e2eReport.newTools?.join(", ")}`);
-console.log(`  - fabric_exec present after: ${e2eReport.fabricPresentAfter}`);
-console.log(`  - Observed tool calls: ${e2eReport.observedToolCalls?.join(" -> ")}`);
-console.log(`  - Bootstrap errors: ${e2eReport.bootstrapErrors?.length}`);
-
-assert(e2eReport.fabricPresentBefore === false, "fabric_exec MUST be absent before lazy_load");
-assert(e2eReport.fabricPresentAfter === true, "fabric_exec MUST be present after lazy_load");
-assert(
-  e2eReport.newTools.includes("fabric_exec"),
-  "newTools must include 'fabric_exec'"
-);
-assert(
-  e2eReport.observedToolCalls.includes("fabric_exec"),
-  "fabric_exec must have been called by the model"
-);
-assert(
-  e2eReport.bootstrapErrors.length === 0,
-  `Expected 0 bootstrap errors, got: ${JSON.stringify(e2eReport.bootstrapErrors)}`
-);
-assert(
-  e2eReport.sessionStartCaptured === true,
-  "session_start must have been captured eagerly"
-);
-
-console.log("  ✓ fabric_exec was absent before lazy_load");
-console.log("  ✓ pi-fabric loaded successfully mid-session");
-console.log("  ✓ fabric_exec was executed in the same session and returned 42");
-console.log("  ✓ No 'Pi Fabric has not bootstrapped' errors occurred");
+console.log("  ✓ Missing-cache package loaded eagerly");
+console.log("  ✓ Unified cache captured its exposed tool");
+console.log("  ✓ The tool executed in the same session and returned 42");
 console.log("Check 4 passed.\n");
 
 console.log("==============================================");

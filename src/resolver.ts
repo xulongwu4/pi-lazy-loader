@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { type ManifestEntry, findManifestEntry } from "./manifest.js";
+import type { PackageDefinition } from "./package.js";
+import { npmPackageName, stripGitRef } from "./package-locator.js";
 
 /**
  * Get the agent directory where user packages are installed.
@@ -18,6 +19,39 @@ export function getUserAgentDir(): string {
   return join(homedir(), ".pi", "agent");
 }
 
+/** Read lazy package definitions directly from deferred settings entries. */
+export function discoverLazyPackages(agentDir = getUserAgentDir()): PackageDefinition[] {
+  let settings: any;
+  try {
+    settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+  } catch {
+    return [];
+  }
+
+  const packages = new Map<string, PackageDefinition>();
+  for (const item of settings?.packages ?? []) {
+    if (!item || typeof item.source !== "string" || !Array.isArray(item.extensions) || item.extensions.length !== 0) {
+      continue;
+    }
+
+    try {
+      const root = resolvePackageRoot(item.source, agentDir);
+      const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
+      const name = typeof pkg.name === "string" && pkg.name.trim() ? pkg.name.trim() : item.source;
+      const aliases = [name, item.source];
+      if (item.source.startsWith("npm:")) aliases.push(npmPackageName(item.source.slice(4)));
+      packages.set(name, {
+        name,
+        source: item.source,
+        aliases: aliases.map((alias) => alias.toLowerCase()),
+      });
+    } catch (error: any) {
+      console.warn(`[pi-lazy-loader] Skipping deferred package "${item.source}": ${error?.message ?? error}`);
+    }
+  }
+  return Array.from(packages.values());
+}
+
 /**
  * Resolve package root on disk for an npm or git package locator.
  */
@@ -27,17 +61,17 @@ export function resolvePackageRoot(source: string, agentDir?: string): string {
 
   let root: string;
   if (trimmed.startsWith("npm:")) {
-    const pkgName = trimmed.slice(4).trim();
+    const pkgName = npmPackageName(trimmed.slice(4).trim());
     root = join(baseDir, "npm", "node_modules", pkgName);
   } else if (trimmed.startsWith("git:")) {
-    const gitSpec = trimmed.slice(4).trim().split("@")[0].replace(/\.git$/, "");
+    const gitSpec = stripGitRef(trimmed.slice(4).trim()).replace(/\.git$/, "");
     root = join(baseDir, "git", gitSpec);
   } else if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
     const url = new URL(trimmed);
-    const gitPath = url.pathname.replace(/^\//, "").replace(/\.git$/, "");
+    const gitPath = stripGitRef(url.pathname.replace(/^\//, "")).replace(/\.git$/, "");
     root = join(baseDir, "git", url.host, gitPath);
-  } else if (existsSync(trimmed)) {
-    root = resolve(trimmed);
+  } else if (existsSync(resolve(baseDir, trimmed))) {
+    root = resolve(baseDir, trimmed);
   } else {
     throw new Error(`Unrecognized or non-existent package locator: "${source}"`);
   }
@@ -130,14 +164,8 @@ export function discoverExtensionsInDir(dir: string): string[] {
  * Resolve all extension entry files for a package.
  * Reads package.json `pi.extensions`, or falls back to `extensions/` convention.
  */
-export function resolvePackageEntries(sourceOrManifest: string | ManifestEntry, agentDir?: string): string[] {
-  let source: string;
-  if (typeof sourceOrManifest === "string") {
-    const manifest = findManifestEntry(sourceOrManifest);
-    source = manifest ? manifest.source : sourceOrManifest;
-  } else {
-    source = sourceOrManifest.source;
-  }
+export function resolvePackageEntries(sourceOrPackage: string | PackageDefinition, agentDir?: string): string[] {
+  const source = typeof sourceOrPackage === "string" ? sourceOrPackage : sourceOrPackage.source;
 
   const root = resolvePackageRoot(source, agentDir);
   const pkgJsonPath = join(root, "package.json");

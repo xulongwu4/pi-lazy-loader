@@ -43,7 +43,10 @@ const pi: any = {
 };
 
 try {
-  const loader = new LazyLoader(pi, root, false);
+  const loader = new LazyLoader(pi, root, false, [{
+    name: "pi-token-burden",
+    source: "npm:pi-token-burden",
+  }]);
   loader.reserveCommand("pi-token-burden", "token-burden");
   const lazyStub = { description: "[lazy] load pi-token-burden then run /token-burden", handler() {} };
   commands.set("token-burden", lazyStub);

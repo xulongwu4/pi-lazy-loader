@@ -1,7 +1,8 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { findManifestEntry, type ManifestEntry } from "./manifest.js";
-import { getUserAgentDir } from "./resolver.js";
+import { discoverLazyPackages, getUserAgentDir } from "./resolver.js";
+import { findPackageDefinition } from "./package.js";
+import { npmPackageName, packageSourceAliases } from "./package-locator.js";
 
 export interface PinResult {
   success: boolean;
@@ -17,36 +18,16 @@ export function getUserSettingsPath(agentDir?: string): string {
   return join(dir, "settings.json");
 }
 
-/**
- * Check if a packages array item matches a package identifier or manifest entry.
- */
-export function isPackageMatch(item: any, identifier: string, manifest?: ManifestEntry): boolean {
-  const sourceStr = typeof item === "string" ? item : (item?.source ?? "");
-  if (!sourceStr) return false;
+function packageNameFromSource(source: string): string {
+  return source.trim().startsWith("npm:") ? npmPackageName(source.trim().slice(4)) : source;
+}
 
-  const normalizedInput = identifier.trim().toLowerCase();
-  const normalizedSource = sourceStr.trim().toLowerCase();
-
-  // 1. Direct match with input string
-  if (normalizedSource === normalizedInput) return true;
-  if (normalizedSource === `npm:${normalizedInput}`) return true;
-  if (normalizedSource === `git:${normalizedInput}`) return true;
-  if (`npm:${normalizedSource}` === normalizedInput) return true;
-  if (`git:${normalizedSource}` === normalizedInput) return true;
-
-  // 2. Match with manifest entry
-  if (manifest) {
-    if (normalizedSource === manifest.source.toLowerCase()) return true;
-    if (normalizedSource === manifest.locator.toLowerCase()) return true;
-    if (normalizedSource === manifest.name.toLowerCase()) return true;
-    if (manifest.aliases?.some((alias) => normalizedSource === alias.toLowerCase())) return true;
-
-    // Bare name match (e.g. source is "npm:pi-fabric" and item is "npm:pi-fabric")
-    const bareSource = normalizedSource.replace(/^(npm|git):/, "");
-    if (bareSource === manifest.name.toLowerCase()) return true;
-  }
-
-  return false;
+/** Check a settings entry by exact source or canonical npm package name. */
+export function isPackageMatch(item: any, identifier: string): boolean {
+  const source = typeof item === "string" ? item : (item?.source ?? "");
+  if (!source) return false;
+  const expected = packageSourceAliases(identifier);
+  return Array.from(packageSourceAliases(source)).some((alias) => expected.has(alias));
 }
 
 /**
@@ -56,11 +37,10 @@ export function isPackageMatch(item: any, identifier: string, manifest?: Manifes
  */
 export function transformPinSettings(settings: Record<string, any>, packageInput: string): {
   updatedSettings: Record<string, any>;
-  manifest: ManifestEntry | undefined;
+  packageName: string;
   previousEntry: any;
   updatedEntry: any;
 } {
-  const manifest = findManifestEntry(packageInput);
   const rawPackages = settings.packages;
 
   if (!Array.isArray(rawPackages)) {
@@ -70,7 +50,7 @@ export function transformPinSettings(settings: Record<string, any>, packageInput
   // Find all matching indices
   const matchingIndices: number[] = [];
   for (let i = 0; i < rawPackages.length; i++) {
-    if (isPackageMatch(rawPackages[i], packageInput, manifest)) {
+    if (isPackageMatch(rawPackages[i], packageInput)) {
       matchingIndices.push(i);
     }
   }
@@ -118,9 +98,11 @@ export function transformPinSettings(settings: Record<string, any>, packageInput
     packages: newPackages,
   };
 
+  const source = targetEntry.source;
+  const packageName = packageNameFromSource(source);
   return {
     updatedSettings,
-    manifest,
+    packageName,
     previousEntry: targetEntry,
     updatedEntry: rest,
   };
@@ -144,9 +126,10 @@ export function pinPackageInSettingsFile(settingsPath: string, packageInput: str
     throw new Error(`Failed to read/parse settings file at "${settingsPath}": ${err?.message ?? err}`);
   }
 
-  const { updatedSettings, manifest, previousEntry, updatedEntry } = transformPinSettings(
+  const packageDefinition = findPackageDefinition(discoverLazyPackages(dirname(settingsPath)), packageInput);
+  const { updatedSettings, packageName, previousEntry, updatedEntry } = transformPinSettings(
     parsedSettings,
-    packageInput
+    packageDefinition?.source ?? packageInput
   );
 
   // Atomic write via temp file + rename
@@ -166,8 +149,8 @@ export function pinPackageInSettingsFile(settingsPath: string, packageInput: str
 
   return {
     success: true,
-    package: manifest?.name ?? packageInput,
-    source: manifest?.source ?? previousEntry.source,
+    package: packageDefinition?.name ?? packageName,
+    source: previousEntry.source,
     settingsPath,
     previousEntry,
     updatedEntry,

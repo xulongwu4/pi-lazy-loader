@@ -11,9 +11,9 @@ import * as typebox from "typebox";
 import * as typeboxCompile from "typebox/compile";
 import * as typeboxValue from "typebox/value";
 
-import { MANIFEST, type ManifestEntry, findManifestEntry } from "./manifest.js";
-import { getUserAgentDir, resolvePackageEntries } from "./resolver.js";
-import { updateCachedPackageTools, type CachedTool } from "./tool-cache.js";
+import { findPackageDefinition, type PackageDefinition } from "./package.js";
+import { discoverLazyPackages, getUserAgentDir, resolvePackageEntries } from "./resolver.js";
+import { updateCachedPackage, type CachedRegistration } from "./cache.js";
 import {
   type CommandDescriptionContext,
   formatPostLoadDescription,
@@ -29,7 +29,7 @@ export type PackageLoadStatus = "deferred" | "loading" | "loaded" | "failed";
 export type CommandStatus = "deferred" | "ready" | "ready (eager)" | "missing" | "failed" | "loading";
 
 export interface PackageState {
-  manifest: ManifestEntry;
+  manifest: PackageDefinition;
   status: PackageLoadStatus;
   error?: string;
   loadedEntries: string[];
@@ -122,11 +122,33 @@ export class LazyLoader {
     return this.capturedCommands.get(packageName)?.has(commandName) ?? false;
   }
 
-  constructor(pi: any, agentDir?: string, syncSettings = true) {
+  private refreshCache(
+    packageName: string,
+    observedTools: Map<string, any>,
+    observedCommands: Map<string, any>
+  ): void {
+    try {
+      const registrations = (items: Map<string, any>): CachedRegistration[] =>
+        Array.from(items.entries()).map(([name, value]) => ({
+          name,
+          description: typeof value?.description === "string" ? value.description : undefined,
+        }));
+      updateCachedPackage(
+        this.agentDir,
+        packageName,
+        registrations(observedTools),
+        registrations(observedCommands)
+      );
+    } catch (error: any) {
+      console.error(`[pi-lazy-loader] Failed to cache registrations for "${packageName}": ${error?.message ?? error}`);
+    }
+  }
+
+  constructor(pi: any, agentDir?: string, syncSettings = true, packages?: PackageDefinition[]) {
     this.pi = pi;
     this.agentDir = agentDir ?? getUserAgentDir();
 
-    for (const entry of MANIFEST) {
+    for (const entry of packages ?? discoverLazyPackages(this.agentDir)) {
       this.states.set(entry.name, {
         manifest: entry,
         status: "deferred",
@@ -168,7 +190,7 @@ export class LazyLoader {
         if (Array.isArray(item.extensions)) {
           if (item.extensions.length > 0) {
             eagerSources.add(item.source);
-            const entry = findManifestEntry(item.source);
+            const entry = this.getPackageState(item.source)?.manifest;
             this.partialExtensionPackages.add(entry ? entry.name : item.source);
           }
         } else {
@@ -201,7 +223,7 @@ export class LazyLoader {
   }
 
   reserveCommand(identifier: string, commandName: string, metadata?: ReserveCommandOptions): void {
-    const manifest = findManifestEntry(identifier);
+    const manifest = this.getPackageState(identifier)?.manifest;
     if (!manifest) throw new Error(`Unknown package "${identifier}"`);
     let names = this.reservedCommands.get(manifest.name);
     if (!names) {
@@ -212,7 +234,7 @@ export class LazyLoader {
   }
 
   reserveTool(identifier: string, toolName: string): void {
-    const manifest = findManifestEntry(identifier);
+    const manifest = this.getPackageState(identifier)?.manifest;
     if (!manifest) throw new Error(`Unknown package "${identifier}"`);
     let names = this.reservedTools.get(manifest.name);
     if (!names) {
@@ -223,7 +245,7 @@ export class LazyLoader {
   }
 
   protectTool(identifier: string, toolName: string): void {
-    const manifest = findManifestEntry(identifier);
+    const manifest = this.getPackageState(identifier)?.manifest;
     if (!manifest) throw new Error(`Unknown package "${identifier}"`);
     let names = this.protectedTools.get(manifest.name);
     if (!names) {
@@ -234,7 +256,7 @@ export class LazyLoader {
   }
 
   isCommandCaptured(identifier: string, commandName: string): boolean {
-    const manifest = findManifestEntry(identifier);
+    const manifest = this.getPackageState(identifier)?.manifest;
     if (!manifest) return false;
     return this.hasCapturedCommand(manifest.name, commandName);
   }
@@ -254,7 +276,7 @@ export class LazyLoader {
   }
 
   async invokeCapturedCommand(identifier: string, commandName: string, args: string, ctx: any): Promise<any> {
-    const manifest = findManifestEntry(identifier);
+    const manifest = this.getPackageState(identifier)?.manifest;
     if (!manifest) throw new Error(`Unknown package "${identifier}"`);
     const command = this.getCapturedCommand(manifest.name, commandName);
     if (!command?.handler) throw new Error(`Package "${manifest.name}" did not register reserved command "${commandName}"`);
@@ -262,11 +284,11 @@ export class LazyLoader {
   }
 
   getPackageState(identifier: string): PackageState | undefined {
-    const entry = findManifestEntry(identifier);
-    if (entry) {
-      return this.states.get(entry.name);
-    }
-    return undefined;
+    const definition = findPackageDefinition(
+      Array.from(this.states.values(), (state) => state.manifest),
+      identifier
+    );
+    return definition ? this.states.get(definition.name) : undefined;
   }
 
   /**
@@ -278,14 +300,14 @@ export class LazyLoader {
    * - Replays missed session_start and resources_discover exactly once with real objects
    */
   async loadPackage(identifier: string): Promise<PackageLoadResult> {
-    const manifest = findManifestEntry(identifier);
+    const manifest = this.getPackageState(identifier)?.manifest;
     if (!manifest) {
       return {
         success: false,
         status: "failed",
         package: identifier,
         source: identifier,
-        error: `Unknown package "${identifier}". Only Phase 0 packages can be lazily loaded.`,
+        error: `Unknown package "${identifier}". Configure it with "extensions": [] before lazy loading.`,
       };
     }
 
@@ -347,8 +369,16 @@ export class LazyLoader {
         const stagedTools = new Map<string, any>();
         const newlyLoaded: string[] = [];
         const observedTools = new Map<string, any>();
+        const observedCommands = new Map<string, any>();
         for (const entryPath of entries) {
-          await this.loadSingleEntry(entryPath, manifest.name, stagedRegistrations, stagedTools, observedTools);
+          await this.loadSingleEntry(
+            entryPath,
+            manifest.name,
+            stagedRegistrations,
+            stagedTools,
+            observedTools,
+            observedCommands
+          );
           newlyLoaded.push(entryPath);
         }
 
@@ -387,7 +417,7 @@ export class LazyLoader {
         // Commit staged reserved real tools so they replace proxies.
         for (const tool of stagedTools.values()) this.pi.registerTool(tool);
 
-        // Track missing declared tools
+        // Track cached tools that disappeared from the loaded package
         const reserved = this.reservedTools.get(manifest.name);
         const missingTools: string[] = [];
         if (reserved) {
@@ -409,25 +439,8 @@ export class LazyLoader {
         pkgState.loadMs = Date.now() - t0;
         pkgState.error = undefined;
 
-        // Cache advisory metadata for manifest-declared proxy tools only
-        if (manifest.tools?.length) {
-          try {
-            const declaredNames = new Set(manifest.tools.map((t) => t.name));
-            const toolsToCache: CachedTool[] = [];
-            for (const name of declaredNames) {
-              const tool = stagedTools.get(name) ?? observedTools.get(name);
-              if (tool) {
-                toolsToCache.push({
-                  name,
-                  description: typeof tool.description === "string" ? tool.description : undefined,
-                });
-              }
-            }
-            updateCachedPackageTools(this.agentDir, manifest.name, toolsToCache);
-          } catch (cacheErr: any) {
-            console.error(`[pi-lazy-loader] Failed to cache tools for "${manifest.name}": ${cacheErr?.message ?? cacheErr}`);
-          }
-        }
+        // Refresh every exposed command and tool for the next session.
+        this.refreshCache(manifest.name, observedTools, observedCommands);
 
         return {
           success: true,
@@ -468,7 +481,8 @@ export class LazyLoader {
     packageName: string,
     stagedRegistrations?: Map<string, any>,
     stagedTools?: Map<string, any>,
-    observedTools?: Map<string, any>
+    observedTools?: Map<string, any>,
+    observedCommands?: Map<string, any>
   ): Promise<void> {
     const jiti = createJiti(import.meta.url, {
       moduleCache: false,
@@ -483,6 +497,11 @@ export class LazyLoader {
 
     // Proxy pi.on to capture handlers registered by this entry while registering them for future events
     const capturedHandlers: Array<{ event: string; handler: (...args: any[]) => any }> = [];
+    const refreshIfLoaded = () => {
+      if (observedTools && observedCommands && this.states.get(packageName)?.status === "loaded") {
+        this.refreshCache(packageName, observedTools, observedCommands);
+      }
+    };
 
     const proxy = new Proxy(this.pi, {
       get: (target: any, prop: string | symbol, receiver: any) => {
@@ -490,6 +509,7 @@ export class LazyLoader {
           return (tool: any) => {
             if (tool && typeof tool.name === "string") {
               observedTools?.set(tool.name, tool);
+              refreshIfLoaded();
               if (this.protectedTools.get(packageName)?.has(tool.name)) return;
               if (this.reservedTools.get(packageName)?.has(tool.name)) {
                 stagedTools?.set(tool.name, tool);
@@ -501,6 +521,8 @@ export class LazyLoader {
         }
         if (prop === "registerCommand") {
           return (name: string, command: any) => {
+            observedCommands?.set(name, command);
+            refreshIfLoaded();
             if (this.reservedCommands.get(packageName)?.has(name)) {
               if (stagedRegistrations) {
                 if (stagedRegistrations.has(name)) {

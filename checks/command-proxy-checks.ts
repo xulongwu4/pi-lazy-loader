@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-import { MANIFEST, findManifestEntry } from "../src/manifest.js";
+import type { PackageDefinition } from "../src/package.js";
+import { writeCache } from "../src/cache.js";
 import {
   loadCommandConfig,
   mergeCommandDefinitions,
-  validateUserConfig,
-  validateManifestCommands,
+  validateUserConfig as validateUserConfigRaw,
+  validatePackageCommands,
   type MergedCommandDefinition,
   type UserCommandConfig,
 } from "../src/command-config.js";
@@ -24,17 +25,38 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
 }
 
+const PACKAGES: PackageDefinition[] = [
+  {
+    name: "pi-mcp-adapter",
+    source: "npm:pi-mcp-adapter",
+    aliases: ["pi-mcp-adapter", "npm:pi-mcp-adapter"],
+    commands: [
+      { name: "mcp", description: "Show MCP server status" },
+      { name: "pi-mcp", description: "Show MCP server status" },
+      { name: "mcp-auth", description: "Authenticate with an MCP server" },
+    ],
+  },
+  {
+    name: "pi-token-burden",
+    source: "npm:pi-token-burden",
+    aliases: ["pi-token-burden", "npm:pi-token-burden"],
+    commands: [{ name: "token-burden", description: "Show token-budget usage" }],
+  },
+];
+
+const validateUserConfig = (raw: unknown) => validateUserConfigRaw(raw, PACKAGES);
+
 console.log("=== Running Command Proxy Feature Checks ===\n");
 
 // -----------------------------------------------------------------------------
-// CHECK 1: Manifest Command Validation
+// CHECK 1: Cached Command Validation
 // -----------------------------------------------------------------------------
-console.log("--- Check 1: Manifest Command Validation ---");
+console.log("--- Check 1: Cached Command Validation ---");
 
-// 1.1 Current MANIFEST commands must be valid
-const manifestDiagnostics = validateManifestCommands(MANIFEST);
-assert(manifestDiagnostics.length === 0, `Manifest commands validation failed: ${manifestDiagnostics.join("; ")}`);
-console.log("  ✓ MANIFEST commands pass validation");
+// 1.1 Current PACKAGES commands must be valid
+const packageDiagnostics = validatePackageCommands(PACKAGES);
+assert(packageDiagnostics.length === 0, `Cached commands validation failed: ${packageDiagnostics.join("; ")}`);
+console.log("  ✓ PACKAGES commands pass validation");
 
 // 1.2 Omitted descriptions are valid in declarations
 const omittedDescEntry: any = {
@@ -45,42 +67,30 @@ const omittedDescEntry: any = {
   capability: "MCP",
   commands: [{ name: "mcp" }],
 };
-const omittedDiag = validateManifestCommands([omittedDescEntry]);
+const omittedDiag = validatePackageCommands([omittedDescEntry]);
 assert(omittedDiag.length === 0, `Omitted description should be valid, got: ${omittedDiag.join("; ")}`);
-console.log("  ✓ Omitted command description in manifest entry is accepted");
+console.log("  ✓ Omitted command description in package definition is accepted");
 
-// 1.3 Invalid command names rejected
-const invalidNames = ["MCP", "mcp_tool", "-leading", "has spaces", "slash/cmd", "/token-burden", ""];
-for (const name of invalidNames) {
-  const badEntry: any = {
-    name: "pi-mcp-adapter",
-    source: "npm:pi-mcp-adapter",
-    locator: "npm:pi-mcp-adapter",
-    cost: 0.2,
-    capability: "MCP",
-    commands: [{ name }],
-  };
-  const diags = validateManifestCommands([badEntry]);
-  assert(diags.length > 0, `Invalid command name "${name}" should produce diagnostics`);
+// 1.3 Cached names reflect commands Pi already accepted, including underscores
+const cachedNameEntry: any = {
+  name: "pi-mcp-adapter",
+  source: "npm:pi-mcp-adapter",
+  locator: "npm:pi-mcp-adapter",
+  cost: 0,
+  capability: "MCP",
+  commands: [{ name: "mcp__agent-lsp__rename", description: "Cached MCP command" }],
+};
+assert(validatePackageCommands([cachedNameEntry]).length === 0, "cached underscore command must remain proxyable");
+console.log("  ✓ Cached Pi command names are preserved without user-config restrictions");
+
+// 1.4 Only unusable cached names are rejected; descriptions do not suppress commands
+for (const name of ["", "bad\nname"]) {
+  const invalidEntry = { ...cachedNameEntry, commands: [{ name }] };
+  assert(validatePackageCommands([invalidEntry]).length > 0, `Invalid cached command name ${JSON.stringify(name)} must be rejected`);
 }
-console.log("  ✓ Invalid command names rejected");
-
-// 1.4 Invalid descriptions rejected (empty string, newlines, control characters, > 240 chars)
-const badDescriptions = ["", "has\nnewline", "has\rreturn", "has\x00null", "x".repeat(241)];
-for (const description of badDescriptions) {
-  const badDescEntry: any = {
-    name: "pi-mcp-adapter",
-    source: "npm:pi-mcp-adapter",
-    locator: "npm:pi-mcp-adapter",
-    cost: 0.2,
-    capability: "MCP",
-    commands: [{ name: "mcp", description }],
-  };
-  const diags = validateManifestCommands([badDescEntry]);
-  assert(diags.length > 0, `Invalid description "${description.slice(0, 15)}" should produce diagnostics`);
-}
-console.log("  ✓ Invalid command descriptions rejected");
-
+const longDescriptionEntry = { ...cachedNameEntry, commands: [{ name: "mcp", description: "x".repeat(500) }] };
+assert(validatePackageCommands([longDescriptionEntry]).length === 0, "cached descriptions must not suppress real commands");
+console.log("  ✓ Cached registrations reject unusable names without dropping long descriptions");
 // 1.5 Duplicate command names in same package rejected
 const duplicateEntry: any = {
   name: "pi-mcp-adapter",
@@ -90,31 +100,31 @@ const duplicateEntry: any = {
   capability: "MCP",
   commands: [{ name: "mcp", description: "First" }, { name: "mcp", description: "Second" }],
 };
-const dupDiags = validateManifestCommands([duplicateEntry]);
-assert(dupDiags.length > 0, "Duplicate command names in manifest entry must produce diagnostics");
-console.log("  ✓ Duplicate command names in manifest entry rejected");
+const dupDiags = validatePackageCommands([duplicateEntry]);
+assert(dupDiags.length > 0, "Duplicate command names in package definition must produce diagnostics");
+console.log("  ✓ Duplicate command names in package definition rejected");
 
 // -----------------------------------------------------------------------------
 // CHECK 2: User Configuration Validation and Schema
 // -----------------------------------------------------------------------------
 console.log("--- Check 2: User Configuration Validation and Loading ---");
 
-// 2.1 Absent configuration is valid and returns built-ins only
+// 2.1 Absent configuration is valid and returns cacheds only
 const tempAgentDir = join(tmpdir(), `pi-lazy-cmd-test-${Date.now()}`);
 mkdirSync(tempAgentDir, { recursive: true });
 
 try {
-  const absentResult = loadCommandConfig({ agentDir: tempAgentDir });
+  const absentResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
   assert(absentResult.diagnostics.length === 0, `Absent config should have 0 diagnostics, got: ${absentResult.diagnostics.join("; ")}`);
-  assert(absentResult.definitions.length > 0, "Absent config should return built-in definitions");
-  console.log("  ✓ Absent user config returns built-ins with zero diagnostics");
+  assert(absentResult.definitions.length > 0, "Absent config should return cached definitions");
+  console.log("  ✓ Absent user config returns cacheds with zero diagnostics");
 
   // 2.2 Malformed JSON handled gracefully
   writeFileSync(join(tempAgentDir, "lazy-loader.json"), "NOT VALID JSON {{{{");
-  const malformedResult = loadCommandConfig({ agentDir: tempAgentDir });
+  const malformedResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
   assert(malformedResult.diagnostics.some((d) => d.includes("JSON") || d.includes("parse")), "Malformed JSON must produce parse diagnostic");
-  assert(malformedResult.definitions.length > 0, "Malformed JSON must fall back to built-ins");
-  console.log("  ✓ Malformed JSON produces diagnostic and falls back to built-ins");
+  assert(malformedResult.definitions.length > 0, "Malformed JSON must fall back to cacheds");
+  console.log("  ✓ Malformed JSON produces diagnostic and falls back to cacheds");
 
   // 2.3 Oversized configuration (> 64 KiB) rejected
   const oversizedData = {
@@ -127,14 +137,14 @@ try {
     },
   };
   writeFileSync(join(tempAgentDir, "lazy-loader.json"), JSON.stringify(oversizedData));
-  const oversizedResult = loadCommandConfig({ agentDir: tempAgentDir });
+  const oversizedResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
   assert(oversizedResult.diagnostics.some((d) => d.includes("64 KiB") || d.includes("exceeds")), "Oversized file must produce diagnostic");
   console.log("  ✓ Oversized config (> 64 KiB) rejected");
 
   // 2.4 Wrong version rejected
   const wrongVersionData = { version: 2, packages: {} };
   writeFileSync(join(tempAgentDir, "lazy-loader.json"), JSON.stringify(wrongVersionData));
-  const wrongVerResult = loadCommandConfig({ agentDir: tempAgentDir });
+  const wrongVerResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
   assert(wrongVerResult.diagnostics.some((d) => d.includes("version")), "Unsupported version must produce diagnostic");
   console.log("  ✓ Unsupported version rejected");
 
@@ -241,34 +251,34 @@ const aliasConfig: UserCommandConfig = {
 };
 const aliasValidated = validateUserConfig(aliasConfig);
 assert(aliasValidated.diagnostics.length === 0, `Alias config should be valid: ${aliasValidated.diagnostics.join("; ")}`);
-const mergedAlias = mergeCommandDefinitions(MANIFEST, aliasValidated.config);
+const mergedAlias = mergeCommandDefinitions(PACKAGES, aliasValidated.config);
 const mcpDef = mergedAlias.definitions.find((d) => d.commandName === "mcp");
 assert(mcpDef?.packageName === "pi-mcp-adapter", `Alias must resolve to canonical package name "pi-mcp-adapter", got "${mcpDef?.packageName}"`);
-console.log("  ✓ Package aliases resolve to canonical manifest name");
+console.log("  ✓ Package aliases resolve to canonical package name");
 
 // -----------------------------------------------------------------------------
 // CHECK 4: Deterministic Merge and Conflict Outcomes
 // -----------------------------------------------------------------------------
 console.log("--- Check 4: Deterministic Merge and Conflict Outcomes ---");
 
-// 4.1 Exact user command match overrides description when provided; string shorthand preserves built-in description
+// 4.1 Exact user command match overrides description when provided; string shorthand preserves cached description
 const overrideConfig: UserCommandConfig = {
   version: 1,
   packages: {
     "pi-mcp-adapter": {
       commands: [
         { name: "mcp", description: "Custom MCP description" },
-        "pi-mcp", // shorthand - should preserve built-in description
+        "pi-mcp", // shorthand - should preserve cached description
       ],
     },
   },
 };
-const mergedOverride = mergeCommandDefinitions(MANIFEST, overrideConfig);
+const mergedOverride = mergeCommandDefinitions(PACKAGES, overrideConfig);
 const overriddenMcp = mergedOverride.definitions.find((d) => d.commandName === "mcp");
 const preservedPiMcp = mergedOverride.definitions.find((d) => d.commandName === "pi-mcp");
-assert(overriddenMcp?.description === "Custom MCP description", "User object description must override built-in");
-assert(preservedPiMcp?.description === "Show MCP server status", "User string shorthand must preserve built-in description");
-console.log("  ✓ User description overrides built-in; shorthand preserves built-in");
+assert(overriddenMcp?.description === "Custom MCP description", "User object description must override cached");
+assert(preservedPiMcp?.description === "Show MCP server status", "User string shorthand must preserve cached description");
+console.log("  ✓ User description overrides cached; shorthand preserves cached");
 
 // 4.2 Duplicate declarations in user config for same package/command collapse when descriptions equal or one omitted
 const dedupeConfig: UserCommandConfig = {
@@ -282,7 +292,7 @@ const dedupeConfig: UserCommandConfig = {
     },
   },
 };
-const mergedDedupe = mergeCommandDefinitions(MANIFEST, dedupeConfig);
+const mergedDedupe = mergeCommandDefinitions(PACKAGES, dedupeConfig);
 const dedupedMcp = mergedDedupe.definitions.filter((d) => d.commandName === "mcp");
 assert(dedupedMcp.length === 1, `Duplicates must collapse to 1 entry, got ${dedupedMcp.length}`);
 assert(dedupedMcp[0].description === "Supplied description", "Supplied description must win over shorthand");
@@ -300,7 +310,7 @@ const userConflictConfig: UserCommandConfig = {
     },
   },
 };
-const mergedUserConflict = mergeCommandDefinitions(MANIFEST, userConflictConfig);
+const mergedUserConflict = mergeCommandDefinitions(PACKAGES, userConflictConfig);
 assert(mergedUserConflict.diagnostics.some((d) => d.includes("conflict") || d.includes("mcp")), "Conflicting descriptions must produce diagnostic");
 assert(!mergedUserConflict.definitions.some((d) => d.commandName === "mcp"), "Conflicted command name must register no proxy");
 console.log("  ✓ Conflicting descriptions for same package/command skip proxy registration");
@@ -317,7 +327,7 @@ const crossPkgConflictConfig: UserCommandConfig = {
     },
   },
 };
-const mergedCrossConflict = mergeCommandDefinitions(MANIFEST, crossPkgConflictConfig);
+const mergedCrossConflict = mergeCommandDefinitions(PACKAGES, crossPkgConflictConfig);
 assert(mergedCrossConflict.diagnostics.some((d) => d.includes("mcp") && (d.includes("multiple") || d.includes("conflict"))), "Cross-package conflict must produce diagnostic");
 assert(!mergedCrossConflict.definitions.some((d) => d.commandName === "mcp"), "Conflicted command 'mcp' must be skipped from all packages");
 assert(mergedCrossConflict.definitions.some((d) => d.commandName === "pi-mcp"), "Non-conflicted command 'pi-mcp' must continue to register");
@@ -333,7 +343,7 @@ const labelConfig: UserCommandConfig = {
     },
   },
 };
-const mergedLabel = mergeCommandDefinitions(MANIFEST, labelConfig);
+const mergedLabel = mergeCommandDefinitions(PACKAGES, labelConfig);
 const labeledDef = mergedLabel.definitions.find((d) => d.commandName === "mcp");
 assert(labeledDef?.targetLabel === "mcp-service", "targetLabel must be preserved in merged definition");
 const startupDesc = formatStartupDescription(labeledDef!);
@@ -372,6 +382,15 @@ function createMockPackageFixture(options: MockPackageFixtureOptions) {
   );
 
   writeFileSync(join(pkgDir, "index.js"), options.indexJs);
+  writeFileSync(
+    join(root, "settings.json"),
+    JSON.stringify({ packages: [{ source: `npm:${options.packageName}`, extensions: [] }] })
+  );
+  const cachedCommands = PACKAGES.find((pkg) => pkg.name === options.packageName)?.commands ?? [];
+  writeCache(root, {
+    version: 1,
+    packages: { [options.packageName]: { tools: [], commands: cachedCommands } },
+  });
 
   const registeredCommands = new Map<string, any>();
   const registeredTools = new Map<string, any>();
@@ -731,7 +750,7 @@ const pkgJson = JSON.parse(
 );
 
 // 8.1 package.json files array matches expected patterns
-const expectedFilesField = ["index.ts", "manifest.json", "src", "README.md", "lazy-loader.schema.json"];
+const expectedFilesField = ["index.ts", "src", "README.md", "lazy-loader.schema.json"];
 assert(Array.isArray(pkgJson.files), "package.json must contain files array");
 for (const item of expectedFilesField) {
   assert(pkgJson.files.includes(item), `package.json files must include "${item}"`);
@@ -743,15 +762,15 @@ const expectedPackedFiles = [
   "README.md",
   "index.ts",
   "lazy-loader.schema.json",
-  "manifest.json",
   "package.json",
+  "src/cache.ts",
   "src/command-config.ts",
   "src/command-presentation.ts",
   "src/loader.ts",
-  "src/manifest.ts",
+  "src/package-locator.ts",
+  "src/package.ts",
   "src/resolver.ts",
   "src/settings.ts",
-  "src/tool-cache.ts",
   "src/tool-proxy.ts",
 ].sort();
 
