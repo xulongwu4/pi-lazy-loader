@@ -491,6 +491,64 @@ try {
   assert(loader.getCommandStatus("pi-mcp-adapter", "mcp-auth") === "missing", "/mcp-auth was not registered, must be 'missing'");
 
   console.log("  ✓ Per-command readiness distinguishes 'deferred', 'ready', and 'missing'");
+
+// -----------------------------------------------------------------------------
+// CHECK 6: Post-Bind Collision Semantics (suffixed names, unbound runtime)
+// -----------------------------------------------------------------------------
+console.log("--- Check 6: Post-Bind Collision Semantics ---");
+
+// 6.1 A pre-existing numeric-suffix duplicate suppresses the base-name proxy:
+// registering /mcp when Pi already resolved /mcp:1 would only produce /mcp:2.
+{
+  const suffixFixture = createMockPackageFixture({
+    packageName: "pi-mcp-adapter",
+    indexJs: `export default function () {}`,
+  });
+  const suffixPrevDir = process.env.PI_CODING_AGENT_DIR;
+  try {
+    process.env.PI_CODING_AGENT_DIR = suffixFixture.root;
+    suffixFixture.mockPi.registerCommand("mcp:1", { description: "pre-existing duplicate", handler() {} });
+    lazyLoaderExtension(suffixFixture.mockPi);
+    await suffixFixture.mockPi.emitSessionStart();
+    assert(!suffixFixture.registeredCommands.has("mcp"), "proxy must not register when Pi already resolved /mcp:1");
+    assert(suffixFixture.registeredCommands.has("pi-mcp"), "uncontested proxy must still register");
+    console.log("  ✓ Numeric-suffix duplicates suppress the base-name proxy");
+  } finally {
+    if (suffixPrevDir !== undefined) process.env.PI_CODING_AGENT_DIR = suffixPrevDir;
+    else delete process.env.PI_CODING_AGENT_DIR;
+    suffixFixture.cleanup();
+  }
+}
+
+// 6.2 An unreadable command set (unbound runtime) must fail safe without crashing.
+{
+  const unboundFixture = createMockPackageFixture({
+    packageName: "pi-mcp-adapter",
+    indexJs: `export default function () {}`,
+  });
+  const unboundPrevDir = process.env.PI_CODING_AGENT_DIR;
+  try {
+    process.env.PI_CODING_AGENT_DIR = unboundFixture.root;
+    unboundFixture.mockPi.getCommands = () => { throw new Error("not bound"); };
+    lazyLoaderExtension(unboundFixture.mockPi);
+    const notifications: string[] = [];
+    await unboundFixture.mockPi.emitSessionStart({
+      hasUI: true,
+      ui: { notify(message: string) { notifications.push(message); } },
+    });
+    assert(!unboundFixture.registeredCommands.has("mcp"), "no proxies may register when the command set is unreadable");
+    assert(
+      notifications.length === 1 && notifications[0].includes("command proxy registration skipped"),
+      `unreadable command set must notify UI exactly once, got: ${JSON.stringify(notifications)}`
+    );
+    console.log("  ✓ Unreadable command set fails safe without crashing");
+  } finally {
+    if (unboundPrevDir !== undefined) process.env.PI_CODING_AGENT_DIR = unboundPrevDir;
+    else delete process.env.PI_CODING_AGENT_DIR;
+    unboundFixture.cleanup();
+  }
+}
+
 } finally {
   readyFixture.cleanup();
 }

@@ -242,11 +242,21 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event: any, ctx: any) => {
     if (commandProxiesRegistered) return;
     commandProxiesRegistered = true;
-    let visible: Set<string>;
+    // Index both resolved names and their numeric-suffix bases: if Pi already resolved
+    // a duplicate as /name:1, a new /name proxy would only produce /name:2.
+    const visible = new Set<string>();
+    const markVisible = (name: string) => {
+      visible.add(name);
+      const base = /^(.*):\d+$/.exec(name)?.[1];
+      if (base) visible.add(base);
+    };
     try {
-      visible = new Set((pi.getCommands?.() ?? []).map((c: any) => c.name));
+      for (const command of pi.getCommands?.() ?? []) markVisible(command.name);
     } catch (error: any) {
-      console.error(`[pi-lazy-loader] command proxy registration skipped: ${error?.message ?? error}`);
+      const diagnostic = `command proxy registration skipped: ${error?.message ?? error}`;
+      diagnostics.push(diagnostic);
+      console.error(`[pi-lazy-loader] ${diagnostic}`);
+      if (ctx?.hasUI) ctx.ui.notify(`pi-lazy-loader: ${diagnostic}`, "warning");
       return;
     }
     const fresh: string[] = [];
@@ -263,6 +273,8 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     if (fresh.length > 0 && ctx?.hasUI) {
       ctx.ui.notify(`pi-lazy-loader: ${fresh.join("; ")}`, "warning");
     }
+    // Refresh the diagnostic report so it reflects the registered startup proxies.
+    saveReport();
   });
 
   // 3. Register slash command: /lazy (list | add <pkg> | pin <pkg>)
