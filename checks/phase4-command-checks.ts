@@ -43,7 +43,7 @@ const pi: any = {
 };
 
 try {
-  const loader = new LazyLoader(pi, root, false, [{
+  const loader = new LazyLoader(pi, root, [{
     name: "pi-token-burden",
     source: "npm:pi-token-burden",
   }]);

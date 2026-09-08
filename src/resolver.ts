@@ -19,37 +19,14 @@ export function getUserAgentDir(): string {
   return join(homedir(), ".pi", "agent");
 }
 
-/** Read lazy package definitions directly from deferred settings entries. */
-export function discoverLazyPackages(agentDir = getUserAgentDir()): PackageDefinition[] {
-  let settings: any;
-  try {
-    settings = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
-  } catch {
-    return [];
-  }
-
-  const packages = new Map<string, PackageDefinition>();
-  for (const item of settings?.packages ?? []) {
-    if (!item || typeof item.source !== "string" || !Array.isArray(item.extensions) || item.extensions.length !== 0) {
-      continue;
-    }
-
-    try {
-      const root = resolvePackageRoot(item.source, agentDir);
-      const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
-      const name = typeof pkg.name === "string" && pkg.name.trim() ? pkg.name.trim() : item.source;
-      const aliases = [name, item.source];
-      if (item.source.startsWith("npm:")) aliases.push(npmPackageName(item.source.slice(4)));
-      packages.set(name, {
-        name,
-        source: item.source,
-        aliases: aliases.map((alias) => alias.toLowerCase()),
-      });
-    } catch (error: any) {
-      console.warn(`[pi-lazy-loader] Skipping deferred package "${item.source}": ${error?.message ?? error}`);
-    }
-  }
-  return Array.from(packages.values());
+/** Resolve one configured package source to its installed package identity. */
+export function resolvePackageDefinition(source: string, agentDir = getUserAgentDir()): PackageDefinition {
+  const root = resolvePackageRoot(source, agentDir);
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
+  const name = typeof pkg.name === "string" && pkg.name.trim() ? pkg.name.trim() : source;
+  const aliases = [name, source];
+  if (source.startsWith("npm:")) aliases.push(npmPackageName(source.slice(4)));
+  return { name, source, aliases: aliases.map((alias) => alias.toLowerCase()) };
 }
 
 /**

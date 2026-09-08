@@ -1,68 +1,36 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Pi Lazy Loader User Configuration",
-  "description": "User configuration schema for pi-lazy-loader slash-command proxies",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xulongwu4/pi-lazy-loader/blob/main/lazy-loader.schema.json",
+  "title": "pi-lazy-loader configuration",
   "type": "object",
-  "required": ["version", "packages"],
+  "required": ["packages"],
   "additionalProperties": false,
   "properties": {
-    "$schema": {
-      "type": "string",
-      "description": "Optional JSON schema URI"
-    },
-    "version": {
-      "type": "integer",
-      "const": 1,
-      "description": "Schema version (must be 1)"
-    },
+    "$schema": { "type": "string" },
     "packages": {
-      "type": "object",
-      "description": "Package-keyed command proxy configurations",
-      "additionalProperties": {
-        "type": "object",
-        "required": ["commands"],
-        "additionalProperties": false,
-        "properties": {
-          "targetLabel": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
-            "description": "Optional display label rendered alongside canonical package name"
-          },
-          "commands": {
-            "type": "array",
-            "description": "Declared slash commands for this package",
-            "items": {
-              "oneOf": [
-                {
-                  "type": "string",
-                  "pattern": "^[a-z0-9][a-z0-9-]*$",
-                  "description": "Command name shorthand (omits leading slash)"
-                },
-                {
-                  "type": "object",
-                  "required": ["name"],
-                  "additionalProperties": false,
-                  "properties": {
-                    "name": {
-                      "type": "string",
-                      "pattern": "^[a-z0-9][a-z0-9-]*$",
-                      "description": "Command name (omits leading slash)"
-                    },
-                    "description": {
-                      "type": "string",
-                      "minLength": 1,
-                      "maxLength": 240,
-                      "pattern": "^[^\\x00-\\x1f\\x7f]+$",
-                      "description": "Command description"
-                    }
-                  }
-                }
-              ]
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string", "minLength": 1 },
+          {
+            "type": "object",
+            "required": ["source"],
+            "additionalProperties": false,
+            "properties": {
+              "source": { "type": "string", "minLength": 1 },
+              "commands": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "tools": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "string", "minLength": 1 }
+              }
             }
           }
-        }
+        ]
       }
     }
   }

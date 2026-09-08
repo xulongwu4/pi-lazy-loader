@@ -6,24 +6,15 @@ import { spawnSync } from "node:child_process";
 
 import type { PackageDefinition } from "../src/package.js";
 import { writeCache } from "../src/cache.js";
-import {
-  loadCommandConfig,
-  mergeCommandDefinitions,
-  validateUserConfig as validateUserConfigRaw,
-  validatePackageCommands,
-  type MergedCommandDefinition,
-  type UserCommandConfig,
-} from "../src/command-config.js";
-import {
-  formatStartupDescription,
-  formatPostLoadDescription,
-} from "../src/command-presentation.js";
+import { buildCommandDefinitions } from "../src/command-config.js";
 import { LazyLoader } from "../src/loader.js";
 import lazyLoaderExtension from "../index.js";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
 }
+
+const commandDiagnostics = (packages: PackageDefinition[]) => buildCommandDefinitions(packages).diagnostics;
 
 const PACKAGES: PackageDefinition[] = [
   {
@@ -44,8 +35,6 @@ const PACKAGES: PackageDefinition[] = [
   },
 ];
 
-const validateUserConfig = (raw: unknown) => validateUserConfigRaw(raw, PACKAGES);
-
 console.log("=== Running Command Proxy Feature Checks ===\n");
 
 // -----------------------------------------------------------------------------
@@ -54,7 +43,7 @@ console.log("=== Running Command Proxy Feature Checks ===\n");
 console.log("--- Check 1: Cached Command Validation ---");
 
 // 1.1 Current PACKAGES commands must be valid
-const packageDiagnostics = validatePackageCommands(PACKAGES);
+const packageDiagnostics = commandDiagnostics(PACKAGES);
 assert(packageDiagnostics.length === 0, `Cached commands validation failed: ${packageDiagnostics.join("; ")}`);
 console.log("  ✓ PACKAGES commands pass validation");
 
@@ -67,7 +56,7 @@ const omittedDescEntry: any = {
   capability: "MCP",
   commands: [{ name: "mcp" }],
 };
-const omittedDiag = validatePackageCommands([omittedDescEntry]);
+const omittedDiag = commandDiagnostics([omittedDescEntry]);
 assert(omittedDiag.length === 0, `Omitted description should be valid, got: ${omittedDiag.join("; ")}`);
 console.log("  ✓ Omitted command description in package definition is accepted");
 
@@ -80,16 +69,16 @@ const cachedNameEntry: any = {
   capability: "MCP",
   commands: [{ name: "mcp__agent-lsp__rename", description: "Cached MCP command" }],
 };
-assert(validatePackageCommands([cachedNameEntry]).length === 0, "cached underscore command must remain proxyable");
+assert(commandDiagnostics([cachedNameEntry]).length === 0, "cached underscore command must remain proxyable");
 console.log("  ✓ Cached Pi command names are preserved without user-config restrictions");
 
 // 1.4 Only unusable cached names are rejected; descriptions do not suppress commands
 for (const name of ["", "bad\nname"]) {
   const invalidEntry = { ...cachedNameEntry, commands: [{ name }] };
-  assert(validatePackageCommands([invalidEntry]).length > 0, `Invalid cached command name ${JSON.stringify(name)} must be rejected`);
+  assert(commandDiagnostics([invalidEntry]).length > 0, `Invalid cached command name ${JSON.stringify(name)} must be rejected`);
 }
 const longDescriptionEntry = { ...cachedNameEntry, commands: [{ name: "mcp", description: "x".repeat(500) }] };
-assert(validatePackageCommands([longDescriptionEntry]).length === 0, "cached descriptions must not suppress real commands");
+assert(commandDiagnostics([longDescriptionEntry]).length === 0, "cached descriptions must not suppress real commands");
 console.log("  ✓ Cached registrations reject unusable names without dropping long descriptions");
 // 1.5 Duplicate command names in same package rejected
 const duplicateEntry: any = {
@@ -100,264 +89,22 @@ const duplicateEntry: any = {
   capability: "MCP",
   commands: [{ name: "mcp", description: "First" }, { name: "mcp", description: "Second" }],
 };
-const dupDiags = validatePackageCommands([duplicateEntry]);
+const dupDiags = buildCommandDefinitions([duplicateEntry]).diagnostics;
 assert(dupDiags.length > 0, "Duplicate command names in package definition must produce diagnostics");
 console.log("  ✓ Duplicate command names in package definition rejected");
 
-// -----------------------------------------------------------------------------
-// CHECK 2: User Configuration Validation and Schema
-// -----------------------------------------------------------------------------
-console.log("--- Check 2: User Configuration Validation and Loading ---");
-
-// 2.1 Absent configuration is valid and returns cacheds only
-const tempAgentDir = join(tmpdir(), `pi-lazy-cmd-test-${Date.now()}`);
-mkdirSync(tempAgentDir, { recursive: true });
-
-try {
-  const absentResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
-  assert(absentResult.diagnostics.length === 0, `Absent config should have 0 diagnostics, got: ${absentResult.diagnostics.join("; ")}`);
-  assert(absentResult.definitions.length > 0, "Absent config should return cached definitions");
-  console.log("  ✓ Absent user config returns cacheds with zero diagnostics");
-
-  // 2.2 Malformed JSON handled gracefully
-  writeFileSync(join(tempAgentDir, "lazy-loader.json"), "NOT VALID JSON {{{{");
-  const malformedResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
-  assert(malformedResult.diagnostics.some((d) => d.includes("JSON") || d.includes("parse")), "Malformed JSON must produce parse diagnostic");
-  assert(malformedResult.definitions.length > 0, "Malformed JSON must fall back to cacheds");
-  console.log("  ✓ Malformed JSON produces diagnostic and falls back to cacheds");
-
-  // 2.3 Oversized configuration (> 64 KiB) rejected
-  const oversizedData = {
-    version: 1,
-    packages: {
-      "pi-mcp-adapter": {
-        commands: ["mcp"],
-        padding: "x".repeat(66 * 1024),
-      },
-    },
-  };
-  writeFileSync(join(tempAgentDir, "lazy-loader.json"), JSON.stringify(oversizedData));
-  const oversizedResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
-  assert(oversizedResult.diagnostics.some((d) => d.includes("64 KiB") || d.includes("exceeds")), "Oversized file must produce diagnostic");
-  console.log("  ✓ Oversized config (> 64 KiB) rejected");
-
-  // 2.4 Wrong version rejected
-  const wrongVersionData = { version: 2, packages: {} };
-  writeFileSync(join(tempAgentDir, "lazy-loader.json"), JSON.stringify(wrongVersionData));
-  const wrongVerResult = loadCommandConfig({ agentDir: tempAgentDir, packages: PACKAGES });
-  assert(wrongVerResult.diagnostics.some((d) => d.includes("version")), "Unsupported version must produce diagnostic");
-  console.log("  ✓ Unsupported version rejected");
-
-  // 2.5 $schema is accepted, validated as string, ignored at runtime, and exempt from unknown-field rejection
-  const schemaValid = validateUserConfig({
-    $schema: "https://example.com/schema.json",
-    version: 1,
-    packages: {},
-  });
-  assert(schemaValid.diagnostics.length === 0, `$schema should be accepted, got: ${schemaValid.diagnostics.join("; ")}`);
-  assert(schemaValid.config?.version === 1, "Config version should be 1");
-
-  const schemaInvalid = validateUserConfig({
-    $schema: 12345, // invalid type
-    version: 1,
-    packages: {},
-  });
-  assert(schemaInvalid.diagnostics.some((d) => d.includes("$schema")), "Non-string $schema must produce diagnostic");
-  console.log("  ✓ $schema accepted as optional string and exempt from unknown-field checks");
-
-  // 2.6 Unknown top-level fields rejected
-  const unknownTopLevel = validateUserConfig({
-    version: 1,
-    packages: {},
-    extraField: "not allowed",
-  });
-  assert(unknownTopLevel.diagnostics.some((d) => d.includes("unknown") || d.includes("extraField")), "Unknown top-level field must produce diagnostic");
-  console.log("  ✓ Unknown top-level fields rejected");
-
-  // 2.7 Unknown package keys rejected
-  const unknownPkg = validateUserConfig({
-    version: 1,
-    packages: {
-      "completely-unknown-package-xyz": {
-        commands: ["foo"],
-      },
-    },
-  });
-  assert(unknownPkg.diagnostics.some((d) => d.includes("Unknown package")), "Unknown package key must produce diagnostic");
-  console.log("  ✓ Unknown package key rejected");
-
-  // 2.8 Unknown package-level fields rejected
-  const unknownPkgField = validateUserConfig({
-    version: 1,
-    packages: {
-      "pi-mcp-adapter": {
-        commands: ["mcp"],
-        invalidField: "boom",
-      } as any,
-    },
-  });
-  assert(unknownPkgField.diagnostics.some((d) => d.includes("invalidField")), "Unknown package-level field must produce diagnostic");
-  console.log("  ✓ Unknown package-level fields rejected");
-
-  // 2.9 Unknown command-object fields rejected
-  const unknownCmdField = validateUserConfig({
-    version: 1,
-    packages: {
-      "pi-mcp-adapter": {
-        commands: [{ name: "mcp", extra: "nope" } as any],
-      },
-    },
-  });
-  assert(unknownCmdField.diagnostics.some((d) => d.includes("extra")), "Unknown command-object field must produce diagnostic");
-  console.log("  ✓ Unknown command-object fields rejected");
-} finally {
-  rmSync(tempAgentDir, { recursive: true, force: true });
-}
+const crossPackage = buildCommandDefinitions([
+  { name: "one", source: "npm:one", commands: [{ name: "shared" }] },
+  { name: "two", source: "npm:two", commands: [{ name: "shared" }] },
+]);
+assert(!crossPackage.definitions.some((definition) => definition.commandName === "shared"), "Cross-package command conflicts must not register a proxy");
+assert(crossPackage.diagnostics.length > 0, "Cross-package command conflicts must produce diagnostics");
+console.log("  ✓ Cross-package cached command conflicts are skipped");
 
 // -----------------------------------------------------------------------------
-// CHECK 3: Package-Keyed Groups, Mixed Arrays, and Alias Resolution
+// CHECK 2: Reserve Before Register & Multi-Command Capture
 // -----------------------------------------------------------------------------
-console.log("--- Check 3: Package-Keyed Groups, Mixed Arrays, and Alias Resolution ---");
-
-// 3.1 String shorthand, object, and mixed command arrays
-const mixedConfig: UserCommandConfig = {
-  version: 1,
-  packages: {
-    "pi-mcp-adapter": {
-      targetLabel: "mcp-service",
-      commands: [
-        "mcp",
-        "pi-mcp",
-        {
-          name: "mcp-auth",
-          description: "Authenticate with an MCP server",
-        },
-      ],
-    },
-  },
-};
-const mixedValidated = validateUserConfig(mixedConfig);
-assert(mixedValidated.diagnostics.length === 0, `Mixed config should be valid: ${mixedValidated.diagnostics.join("; ")}`);
-console.log("  ✓ String shorthand, object, and mixed command arrays validated");
-
-// 3.2 Package alias resolution: keys like "npm:pi-mcp-adapter" resolve to "pi-mcp-adapter"
-const aliasConfig: UserCommandConfig = {
-  version: 1,
-  packages: {
-    "npm:pi-mcp-adapter": {
-      commands: ["mcp"],
-    },
-  },
-};
-const aliasValidated = validateUserConfig(aliasConfig);
-assert(aliasValidated.diagnostics.length === 0, `Alias config should be valid: ${aliasValidated.diagnostics.join("; ")}`);
-const mergedAlias = mergeCommandDefinitions(PACKAGES, aliasValidated.config);
-const mcpDef = mergedAlias.definitions.find((d) => d.commandName === "mcp");
-assert(mcpDef?.packageName === "pi-mcp-adapter", `Alias must resolve to canonical package name "pi-mcp-adapter", got "${mcpDef?.packageName}"`);
-console.log("  ✓ Package aliases resolve to canonical package name");
-
-// -----------------------------------------------------------------------------
-// CHECK 4: Deterministic Merge and Conflict Outcomes
-// -----------------------------------------------------------------------------
-console.log("--- Check 4: Deterministic Merge and Conflict Outcomes ---");
-
-// 4.1 Exact user command match overrides description when provided; string shorthand preserves cached description
-const overrideConfig: UserCommandConfig = {
-  version: 1,
-  packages: {
-    "pi-mcp-adapter": {
-      commands: [
-        { name: "mcp", description: "Custom MCP description" },
-        "pi-mcp", // shorthand - should preserve cached description
-      ],
-    },
-  },
-};
-const mergedOverride = mergeCommandDefinitions(PACKAGES, overrideConfig);
-const overriddenMcp = mergedOverride.definitions.find((d) => d.commandName === "mcp");
-const preservedPiMcp = mergedOverride.definitions.find((d) => d.commandName === "pi-mcp");
-assert(overriddenMcp?.description === "Custom MCP description", "User object description must override cached");
-assert(preservedPiMcp?.description === "Show MCP server status", "User string shorthand must preserve cached description");
-console.log("  ✓ User description overrides cached; shorthand preserves cached");
-
-// 4.2 Duplicate declarations in user config for same package/command collapse when descriptions equal or one omitted
-const dedupeConfig: UserCommandConfig = {
-  version: 1,
-  packages: {
-    "pi-mcp-adapter": {
-      commands: [
-        "mcp",
-        { name: "mcp", description: "Supplied description" },
-      ],
-    },
-  },
-};
-const mergedDedupe = mergeCommandDefinitions(PACKAGES, dedupeConfig);
-const dedupedMcp = mergedDedupe.definitions.filter((d) => d.commandName === "mcp");
-assert(dedupedMcp.length === 1, `Duplicates must collapse to 1 entry, got ${dedupedMcp.length}`);
-assert(dedupedMcp[0].description === "Supplied description", "Supplied description must win over shorthand");
-console.log("  ✓ Shorthand and object with description collapse to single entry");
-
-// 4.3 Two user objects for the same package/command with different descriptions are a conflict
-const userConflictConfig: UserCommandConfig = {
-  version: 1,
-  packages: {
-    "pi-mcp-adapter": {
-      commands: [
-        { name: "mcp", description: "Desc A" },
-        { name: "mcp", description: "Desc B" },
-      ],
-    },
-  },
-};
-const mergedUserConflict = mergeCommandDefinitions(PACKAGES, userConflictConfig);
-assert(mergedUserConflict.diagnostics.some((d) => d.includes("conflict") || d.includes("mcp")), "Conflicting descriptions must produce diagnostic");
-assert(!mergedUserConflict.definitions.some((d) => d.commandName === "mcp"), "Conflicted command name must register no proxy");
-console.log("  ✓ Conflicting descriptions for same package/command skip proxy registration");
-
-// 4.4 Same command name mapped to different packages is a conflict; other valid commands continue
-const crossPkgConflictConfig: UserCommandConfig = {
-  version: 1,
-  packages: {
-    "pi-mcp-adapter": {
-      commands: ["mcp", "pi-mcp"],
-    },
-    "pi-token-burden": {
-      commands: ["mcp"], // conflicts with pi-mcp-adapter!
-    },
-  },
-};
-const mergedCrossConflict = mergeCommandDefinitions(PACKAGES, crossPkgConflictConfig);
-assert(mergedCrossConflict.diagnostics.some((d) => d.includes("mcp") && (d.includes("multiple") || d.includes("conflict"))), "Cross-package conflict must produce diagnostic");
-assert(!mergedCrossConflict.definitions.some((d) => d.commandName === "mcp"), "Conflicted command 'mcp' must be skipped from all packages");
-assert(mergedCrossConflict.definitions.some((d) => d.commandName === "pi-mcp"), "Non-conflicted command 'pi-mcp' must continue to register");
-console.log("  ✓ Cross-package command conflict skips only conflicted command; other commands continue");
-
-// 4.5 Target label is supplemental and does not replace canonical package name
-const labelConfig: UserCommandConfig = {
-  version: 1,
-  packages: {
-    "pi-mcp-adapter": {
-      targetLabel: "mcp-service",
-      commands: ["mcp"],
-    },
-  },
-};
-const mergedLabel = mergeCommandDefinitions(PACKAGES, labelConfig);
-const labeledDef = mergedLabel.definitions.find((d) => d.commandName === "mcp");
-assert(labeledDef?.targetLabel === "mcp-service", "targetLabel must be preserved in merged definition");
-const startupDesc = formatStartupDescription(labeledDef!);
-assert(startupDesc.includes("pi-mcp-adapter"), "Startup description MUST contain real package name");
-assert(startupDesc.includes("mcp-service"), "Startup description MUST contain targetLabel alongside real package name");
-const postLoadDesc = formatPostLoadDescription(labeledDef!, "Real description");
-assert(postLoadDesc.includes("pi-mcp-adapter"), "Post-load description MUST contain real package name");
-assert(postLoadDesc.includes("mcp-service"), "Post-load description MUST contain targetLabel alongside real package name");
-console.log("  ✓ targetLabel is rendered alongside, never replacing, canonical package name");
-
-// -----------------------------------------------------------------------------
-// CHECK 5: Reserve Before Register & Multi-Command Capture
-// -----------------------------------------------------------------------------
-console.log("--- Check 5: Reserve Before Register & Multi-Command Capture ---");
+console.log("--- Check 2: Reserve Before Register & Multi-Command Capture ---");
 
 interface MockPackageFixtureOptions {
   packageName: string;
@@ -383,8 +130,8 @@ function createMockPackageFixture(options: MockPackageFixtureOptions) {
 
   writeFileSync(join(pkgDir, "index.js"), options.indexJs);
   writeFileSync(
-    join(root, "settings.json"),
-    JSON.stringify({ packages: [{ source: `npm:${options.packageName}`, extensions: [] }] })
+    join(root, "lazy-loader.json"),
+    JSON.stringify({ packages: [`npm:${options.packageName}`] })
   );
   const cachedCommands = PACKAGES.find((pkg) => pkg.name === options.packageName)?.commands ?? [];
   writeCache(root, {
@@ -530,9 +277,9 @@ try {
 }
 
 // -----------------------------------------------------------------------------
-// CHECK 6: Staged Commit Atomicity on Load Failure
+// CHECK 3: Staged Commit Atomicity on Load Failure
 // -----------------------------------------------------------------------------
-console.log("--- Check 6: Staged Commit Atomicity on Load Failure ---");
+console.log("--- Check 3: Staged Commit Atomicity on Load Failure ---");
 
 const failFixture = createMockPackageFixture({
   packageName: "pi-token-burden",
@@ -550,7 +297,7 @@ const failFixture = createMockPackageFixture({
 });
 
 try {
-  const loader = new LazyLoader(failFixture.mockPi, failFixture.root, false);
+  const loader = new LazyLoader(failFixture.mockPi, failFixture.root);
   loader.reserveCommand("pi-token-burden", "token-burden", { declaredDescription: "Show token-budget usage", decorateDescription: true });
 
   const initialStub = {
@@ -602,7 +349,7 @@ const dupFixture = createMockPackageFixture({
 });
 
 try {
-  const loader = new LazyLoader(dupFixture.mockPi, dupFixture.root, false);
+  const loader = new LazyLoader(dupFixture.mockPi, dupFixture.root);
   loader.reserveCommand("pi-token-burden", "token-burden", { declaredDescription: "Token burden" });
 
   const initialStub = {
@@ -666,7 +413,7 @@ writeFileSync(
 );
 
 try {
-  const loader = new LazyLoader(dupMultiFixture.mockPi, dupMultiFixture.root, false);
+  const loader = new LazyLoader(dupMultiFixture.mockPi, dupMultiFixture.root);
   loader.reserveCommand("pi-token-burden", "token-burden", { declaredDescription: "Token burden" });
 
   const initialStub = {
@@ -699,9 +446,9 @@ try {
 }
 
 // -----------------------------------------------------------------------------
-// CHECK 7: Command Readiness in Loader State
+// CHECK 4: Command Readiness in Loader State
 // -----------------------------------------------------------------------------
-console.log("--- Check 7: Command Readiness in Loader State ---");
+console.log("--- Check 4: Command Readiness in Loader State ---");
 
 const readyFixture = createMockPackageFixture({
   packageName: "pi-mcp-adapter",
@@ -714,7 +461,7 @@ const readyFixture = createMockPackageFixture({
 });
 
 try {
-  const loader = new LazyLoader(readyFixture.mockPi, readyFixture.root, false);
+  const loader = new LazyLoader(readyFixture.mockPi, readyFixture.root);
   loader.reserveCommand("pi-mcp-adapter", "mcp");
   loader.reserveCommand("pi-mcp-adapter", "pi-mcp");
   loader.reserveCommand("pi-mcp-adapter", "mcp-auth");
@@ -739,9 +486,9 @@ try {
 }
 
 // -----------------------------------------------------------------------------
-// CHECK 8: Packaging Exact Allowlist & Clean Install Smoke
+// CHECK 5: Packaging Exact Allowlist & Clean Install Smoke
 // -----------------------------------------------------------------------------
-console.log("--- Check 8: Packaging Exact Allowlist & Clean Install Smoke ---");
+console.log("--- Check 5: Packaging Exact Allowlist & Clean Install Smoke ---");
 
 const currentDir = fileURLToPath(new URL(".", import.meta.url));
 const projectRoot = join(currentDir, "..");
@@ -765,12 +512,12 @@ const expectedPackedFiles = [
   "package.json",
   "src/cache.ts",
   "src/command-config.ts",
+  "src/config.ts",
   "src/command-presentation.ts",
   "src/loader.ts",
   "src/package-locator.ts",
   "src/package.ts",
   "src/resolver.ts",
-  "src/settings.ts",
   "src/tool-proxy.ts",
 ].sort();
 

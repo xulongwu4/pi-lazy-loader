@@ -2,7 +2,7 @@ import { Type } from "typebox";
 
 import type { PackageDefinition } from "./package.js";
 import type { LazyLoader, PackageLoadResult } from "./loader.js";
-import type { LazyLoaderCache } from "./cache.js";
+import { selectCachedRegistrations, type LazyLoaderCache } from "./cache.js";
 
 export function formatProxyGuidance(packageName: string, toolName: string): string {
   return `This deferred proxy loads package "${packageName}" without executing "${toolName}". After loading completes, call "${toolName}" again using its loaded schema.`;
@@ -61,7 +61,10 @@ export function registerToolProxies(
   for (const entry of entries) {
     if (loader.getPackageState(entry.name)?.status !== "deferred") continue;
 
-    const cachedTools = cache.packages[entry.name]?.tools ?? [];
+    const cachedTools = selectCachedRegistrations(
+      cache.packages[entry.name]?.tools ?? [],
+      entry.proxyTools
+    );
     for (const declaration of cachedTools) {
       if (occupied.has(declaration.name)) {
         const diagnostic = `Tool proxy "${declaration.name}" for "${entry.name}" was skipped because that name is already registered`;

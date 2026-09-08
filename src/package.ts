@@ -8,6 +8,8 @@ export interface PackageDefinition {
   source: string;
   aliases?: string[];
   commands?: CommandProxyDeclaration[];
+  proxyCommands?: string[];
+  proxyTools?: string[];
 }
 
 export function findPackageDefinition(

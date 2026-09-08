@@ -3,15 +3,15 @@ import { writeFileSync } from "node:fs";
 import { Type } from "typebox";
 
 import { LazyLoader, type PackageLoadResult, type PackageState } from "./src/loader.js";
-import { getUserSettingsPath, pinPackageInSettingsFile } from "./src/settings.js";
-import { discoverLazyPackages, getUserAgentDir } from "./src/resolver.js";
+import { getUserAgentDir } from "./src/resolver.js";
+import { readLazyLoaderConfig, removeLazyPackage } from "./src/config.js";
 import {
-  loadCommandConfig,
+  buildCommandDefinitions,
   type MergedCommandDefinition,
 } from "./src/command-config.js";
 import { formatStartupDescription } from "./src/command-presentation.js";
 import { registerToolProxies } from "./src/tool-proxy.js";
-import { readCache, updateCachedPackage } from "./src/cache.js";
+import { readCache, selectCachedRegistrations, updateCachedPackage } from "./src/cache.js";
 
 function formatStatus(status: PackageState["status"]): string {
   switch (status) {
@@ -37,38 +37,38 @@ export function formatPackageList(
     const status = formatStatus(s.status);
     const err = s.error ? ` [ERROR: ${s.error}]` : "";
     const tools = s.newTools.length > 0 ? ` (tools: ${s.newTools.join(", ")})` : "";
-    const pkgDefs = definitions?.filter((d) => d.packageName === s.manifest.name) ?? [];
+    const pkgDefs = definitions?.filter((d) => d.packageName === s.definition.name) ?? [];
     let cmds = "";
     if (pkgDefs.length > 0) {
       const cmdParts = pkgDefs.map((d) => {
         const cmdStatus = loader
-          ? loader.getCommandStatus(s.manifest.name, d.commandName)
+          ? loader.getCommandStatus(s.definition.name, d.commandName)
           : s.status === "loaded"
-            ? (s.loadedEntries.includes("<configured eager>") ? "ready (eager)" : "ready")
+            ? "ready"
             : s.status;
         return `/${d.commandName} [${cmdStatus}]`;
       });
       cmds = ` (commands: ${cmdParts.join(", ")})`;
     }
-    lines.push(`  [${status}] ${s.manifest.name.padEnd(35)} ${s.manifest.source}${tools}${cmds}${err}`);
+    lines.push(`  [${status}] ${s.definition.name.padEnd(35)} ${s.definition.source}${tools}${cmds}${err}`);
   }
   return lines.join("\n");
 }
 
 export default function lazyLoaderExtension(pi: ExtensionAPI) {
   const agentDir = getUserAgentDir();
-  const lazyPackages = discoverLazyPackages(agentDir);
-  const loader = new LazyLoader(pi, agentDir, false, lazyPackages);
+  const configured = readLazyLoaderConfig(agentDir);
+  const lazyPackages = configured.packages;
+  const loader = new LazyLoader(pi, agentDir, lazyPackages);
 
   let cache = readCache(loader.getAgentDir());
   const cachedPackages = lazyPackages.map((pkg) => ({
     ...pkg,
-    commands: cache.packages[pkg.name]?.commands ?? [],
+    commands: selectCachedRegistrations(cache.packages[pkg.name]?.commands ?? [], pkg.proxyCommands),
   }));
-  const { definitions, diagnostics } = loadCommandConfig({
-    agentDir: loader.getAgentDir(),
-    packages: cachedPackages,
-  });
+  const commandConfig = buildCommandDefinitions(cachedPackages);
+  const definitions = commandConfig.definitions;
+  const diagnostics = [...configured.diagnostics, ...commandConfig.diagnostics];
 
 
   for (const diag of diagnostics) {
@@ -168,9 +168,10 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     });
   }
 
-  // 2. Register cache-driven and user-configured command proxies for deferred packages
+  // 2. Register cache-driven command proxies for deferred packages
   // FR-3: Reserve ALL declared commands for deferred packages before registering any proxy
   const deferredDefinitions: MergedCommandDefinition[] = [];
+  const occupiedCommands = new Set((pi.getCommands?.() ?? []).map((command: any) => command.name));
   const packageDefinitions = new Map<string, MergedCommandDefinition[]>();
 
   for (const def of definitions) {
@@ -182,9 +183,16 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   for (const [pkgName, defs] of packageDefinitions.entries()) {
     if (loader.getPackageState(pkgName)?.status === "deferred") {
       for (const def of defs) {
+        if (occupiedCommands.has(def.commandName)) {
+          loader.protectCommand(def.packageName, def.commandName);
+          const diagnostic = `Command proxy "/${def.commandName}" for "${def.packageName}" was skipped because that name is already registered`;
+          diagnostics.push(diagnostic);
+          console.error(`[pi-lazy-loader] ${diagnostic}`);
+          continue;
+        }
+        occupiedCommands.add(def.commandName);
         loader.reserveCommand(def.packageName, def.commandName, {
-          declaredDescription: def.description,
-          targetLabel: def.targetLabel,
+          declaredDescription: def.declaredDescription,
           decorateDescription: true,
         });
         deferredDefinitions.push(def);
@@ -235,7 +243,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       }
       if (parts[0] === "add" || parts[0] === "pin") {
         const pkgPrefix = parts[1] || "";
-        const matches = loader.getAllStates().map((state) => state.manifest.name).filter((name) => name.toLowerCase().startsWith(pkgPrefix.toLowerCase()));
+        const matches = loader.getAllStates().map((state) => state.definition.name).filter((name) => name.toLowerCase().startsWith(pkgPrefix.toLowerCase()));
         return matches.map((name) => ({ value: `${parts[0]} ${name}`, label: name }));
       }
       return null;
@@ -290,9 +298,10 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
         }
 
         try {
-          const settingsPath = getUserSettingsPath();
-          const res = pinPackageInSettingsFile(settingsPath, pkgName);
-          const msg = `Pinned "${res.package}" to eager startup next time (removed extensions:[] filter in ${settingsPath}).`;
+          const state = loader.getPackageState(pkgName);
+          if (!state) throw new Error(`Unknown configured package "${pkgName}"`);
+          removeLazyPackage(loader.getAgentDir(), state.definition.source);
+          const msg = `Removed "${state.definition.name}" from lazy-loader.json. Reload Pi after ensuring its Pi settings load it eagerly.`;
           if (ctx.hasUI) ctx.ui.notify(msg, "info");
           console.log(msg);
         } catch (err: any) {

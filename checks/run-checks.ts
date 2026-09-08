@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { discoverLazyPackages, getUserAgentDir, resolvePackageEntries, resolvePackageRoot } from "../src/resolver.js";
+import { getUserAgentDir, resolvePackageDefinition, resolvePackageEntries, resolvePackageRoot } from "../src/resolver.js";
 import { LazyLoader } from "../src/loader.js";
-import { isPackageMatch, pinPackageInSettingsFile, transformPinSettings } from "../src/settings.js";
+import { CONFIG_FILENAME, readLazyLoaderConfig, removeLazyPackage } from "../src/config.js";
 import { readCache } from "../src/cache.js";
 
 function assert(condition: boolean, message: string) {
@@ -23,8 +23,9 @@ console.log("--- Check 1: File and Directory Entry Resolution ---");
 const agentDir = getUserAgentDir();
 console.log(`Agent directory: ${agentDir}`);
 
-const lazyPackages = discoverLazyPackages(agentDir);
-assert(lazyPackages.length > 0, "At least one deferred settings package must be discovered");
+const lazyPackages = ["npm:pi-fabric", "npm:pi-web-access", "npm:pi-mcp-adapter", "npm:pi-token-burden"].map((source) =>
+  resolvePackageDefinition(source, agentDir)
+);
 
 for (const pkg of lazyPackages) {
   const root = resolvePackageRoot(pkg.source, agentDir);
@@ -124,7 +125,7 @@ const mockPi: any = {
   },
 };
 
-const loader = new LazyLoader(mockPi, agentDir, false);
+const loader = new LazyLoader(mockPi, agentDir, lazyPackages);
 
 // Simulate genuine startup events
 loader.setSessionStart(
@@ -136,29 +137,13 @@ loader.setResourcesDiscover(
   { cwd: process.cwd() }
 );
 
-// Verify every settings-discovered package is initially deferred
+// Verify every explicitly configured package is initially deferred
 const initialStates = loader.getAllStates();
 assert(initialStates.length === lazyPackages.length, `Expected ${lazyPackages.length} initial states, got ${initialStates.length}`);
 for (const s of initialStates) {
-  assert(s.status === "deferred", `Expected initial status 'deferred' for ${s.manifest.name}, got ${s.status}`);
+  assert(s.status === "deferred", `Expected initial status 'deferred' for ${s.definition.name}, got ${s.status}`);
 }
-console.log(`  ✓ All ${lazyPackages.length} settings packages initialized in 'deferred' status`);
-
-// Reconcile eager settings without touching the real settings file.
-const eagerDir = join(tmpdir(), `pi-lazy-eager-${Date.now()}`);
-mkdirSync(eagerDir, { recursive: true });
-const eagerSettings = join(eagerDir, "settings.json");
-writeFileSync(eagerSettings, JSON.stringify({ packages: ["npm:pi-fabric", { source: "npm:pi-web-access", extensions: [] }] }));
-const syncLoader = new LazyLoader(mockPi, eagerDir, false, [
-  { name: "pi-fabric", source: "npm:pi-fabric" },
-  { name: "pi-web-access", source: "npm:pi-web-access" },
-]);
-const marked = syncLoader.syncConfiguredEager(eagerSettings);
-assert(marked.includes("pi-fabric"), "Configured eager pi-fabric must be marked loaded");
-assert(syncLoader.getPackageState("pi-fabric")?.status === "loaded", "Eager pi-fabric status must be loaded");
-assert(syncLoader.getPackageState("pi-web-access")?.status === "deferred", "Filtered pi-web-access must remain deferred");
-rmSync(eagerDir, { recursive: true, force: true });
-console.log("  ✓ Eager settings reconcile to loaded while extensions: [] remains deferred");
+console.log(`  ✓ All ${lazyPackages.length} configured packages initialized in 'deferred' status`);
 
 // Test concurrent loads: 5 simultaneous calls to loadPackage("pi-token-burden")
 const concurrentPromises = [
@@ -186,7 +171,7 @@ assert(idempotentResult.status === "loaded", "Status must remain 'loaded'");
 console.log("  ✓ Idempotent reload returned immediately with alreadyLoaded: true");
 
 // Test an explicit multi-entry package: pi-quotas (6 entries)
-const quotasLoader = new LazyLoader(mockPi, agentDir, false, [{
+const quotasLoader = new LazyLoader(mockPi, agentDir, [{
   name: "pi-quotas",
   source: "git:github.com/xulongwu4/pi-quotas",
 }]);
@@ -196,7 +181,7 @@ assert(quotasResult.entries?.length === 6, `pi-quotas must load all 6 entries, g
 console.log(`  ✓ Multi-entry package pi-quotas loaded all 6 entry points`);
 
 // Test partial failure: create mock loader where one entry fails
-const failLoader = new LazyLoader(mockPi, agentDir, false);
+const failLoader = new LazyLoader(mockPi, agentDir);
 const invalidResult = await failLoader.loadPackage("non-existent-pkg-abc");
 assert(!invalidResult.success, "Non-existent package must return success: false");
 assert(invalidResult.status === "failed", "Non-existent package must be marked failed");
@@ -205,106 +190,44 @@ console.log("  ✓ Unknown package load cleanly reported failure");
 console.log("Check 2 passed.\n");
 
 // -----------------------------------------------------------------------------
-// CHECK 3: Safe Settings Pin Transform on Temp Data (Never touches real settings)
+// CHECK 3: Explicit lazy-loader.json Package Catalog
 // -----------------------------------------------------------------------------
-console.log("--- Check 3: Safe Settings Pin Transform on Temp Data ---");
-assert(!isPackageMatch({ source: "npm:@a/tools" }, "tools"), "Scoped npm packages must not match ambiguous basenames");
-assert(isPackageMatch({ source: "npm:@a/tools@1.0.0" }, "@a/tools"), "Canonical scoped npm names must match versioned sources");
-
+console.log("--- Check 3: Explicit lazy-loader.json Package Catalog ---");
 const tempDir = join(tmpdir(), `pi-lazy-check-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 mkdirSync(tempDir, { recursive: true });
-const tempSettingsPath = join(tempDir, "settings.json");
 
 try {
-  // Case A: Transform object with extensions: [] and preserve unknown properties
-  const mockSettings = {
-    theme: "nord",
-    customTopLevelProp: "top_level_value",
+  for (const name of ["all-proxies", "filtered-proxies"]) {
+    const packageDir = join(tempDir, "npm", "node_modules", name);
+    mkdirSync(packageDir, { recursive: true });
+    writeFileSync(join(packageDir, "package.json"), JSON.stringify({ name }));
+  }
+  writeFileSync(join(tempDir, CONFIG_FILENAME), JSON.stringify({
+    $schema: "./lazy-loader.schema.json",
     packages: [
-      "npm:some-other-pkg",
+      "npm:all-proxies",
       {
-        source: "npm:pi-fabric",
-        extensions: [],
-        preserveThisField: "important_metadata",
-        nestedConfig: { a: 1, b: "hello" },
-      },
-      {
-        source: "git:github.com/xulongwu4/pi-quotas",
-        extensions: [],
-        gitCustom: true,
+        source: " npm:filtered-proxies ",
+        commands: ["aa", "bb", "aa"],
+        tools: ["tool1", "tool2"],
       },
     ],
-  };
+  }, null, 2));
 
-  writeFileSync(tempSettingsPath, JSON.stringify(mockSettings, null, 2), "utf-8");
+  const configured = readLazyLoaderConfig(tempDir);
+  assert(configured.diagnostics.length === 0, configured.diagnostics.join("; "));
+  assert(configured.packages.length === 2, "Both configured packages must be discovered without settings.json");
+  const all = configured.packages.find((pkg) => pkg.name === "all-proxies");
+  const filtered = configured.packages.find((pkg) => pkg.name === "filtered-proxies");
+  assert(all?.proxyCommands === undefined && all?.proxyTools === undefined, "String form must use all cached proxies");
+  assert(JSON.stringify(filtered?.proxyCommands) === JSON.stringify(["aa", "bb"]), "Command allowlist must be deduplicated");
+  assert(JSON.stringify(filtered?.proxyTools) === JSON.stringify(["tool1", "tool2"]), "Tool allowlist must be preserved");
 
-  // Pin pi-fabric
-  const pinRes1 = pinPackageInSettingsFile(tempSettingsPath, "pi-fabric");
-  assert(pinRes1.success, "Pinning pi-fabric failed");
-
-  const written1 = JSON.parse(readFileSync(tempSettingsPath, "utf-8"));
-  const fabricEntry = written1.packages.find((p: any) => typeof p === "object" && p.source === "npm:pi-fabric");
-
-  assert(fabricEntry !== undefined, "fabric entry must exist");
-  assert(fabricEntry.extensions === undefined, "extensions: [] must be removed");
-  assert(
-    fabricEntry.preserveThisField === "important_metadata",
-    "preserveThisField must be preserved"
-  );
-  assert(
-    fabricEntry.nestedConfig?.b === "hello",
-    "nestedConfig must be preserved"
-  );
-  assert(written1.customTopLevelProp === "top_level_value", "top level props must be preserved");
-  console.log("  ✓ Successfully pinned pi-fabric and preserved unknown properties");
-
-  // Resolve a friendly git package name from installed package metadata, not its basename.
-  const quotasInstallDir = join(tempDir, "git", "github.com", "xulongwu4", "pi-quotas");
-  mkdirSync(quotasInstallDir, { recursive: true });
-  writeFileSync(join(quotasInstallDir, "package.json"), JSON.stringify({ name: "pi-quotas" }));
-  const pinRes2 = pinPackageInSettingsFile(tempSettingsPath, "pi-quotas");
-  assert(pinRes2.success, "Pinning pi-quotas failed");
-
-  const written2 = JSON.parse(readFileSync(tempSettingsPath, "utf-8"));
-  const quotasEntry = written2.packages.find(
-    (p: any) => typeof p === "object" && p.source === "git:github.com/xulongwu4/pi-quotas"
-  );
-  assert(quotasEntry.extensions === undefined, "extensions: [] must be removed from pi-quotas");
-  assert(quotasEntry.gitCustom === true, "gitCustom property must be preserved");
-  console.log("  ✓ Successfully pinned pi-quotas by alias and preserved custom fields");
-
-  // Refusal Case 1: Missing package
-  try {
-    pinPackageInSettingsFile(tempSettingsPath, "npm:not-in-settings");
-    assert(false, "Should have refused missing package");
-  } catch (err: any) {
-    assert(err.message.includes("not found in settings"), `Expected not found, got: ${err.message}`);
-    console.log(`  ✓ Refused missing package: ${err.message}`);
-  }
-
-  // Refusal Case 2: Package is already eager (string form)
-  try {
-    pinPackageInSettingsFile(tempSettingsPath, "npm:some-other-pkg");
-    assert(false, "Should have refused string package");
-  } catch (err: any) {
-    assert(err.message.includes("eager string"), `Expected eager string, got: ${err.message}`);
-    console.log(`  ✓ Refused already eager string package: ${err.message}`);
-  }
-
-  // Refusal Case 3: Ambiguous packages
-  const ambiguousSettings = {
-    packages: [
-      { source: "npm:pi-fabric", extensions: [] },
-      { source: "npm:pi-fabric", extensions: [] },
-    ],
-  };
-  try {
-    transformPinSettings(ambiguousSettings, "pi-fabric");
-    assert(false, "Should have refused ambiguous packages");
-  } catch (err: any) {
-    assert(err.message.includes("ambiguous"), `Expected ambiguous error, got: ${err.message}`);
-    console.log(`  ✓ Refused ambiguous packages: ${err.message}`);
-  }
+  removeLazyPackage(tempDir, "npm:filtered-proxies");
+  const written = JSON.parse(readFileSync(join(tempDir, CONFIG_FILENAME), "utf-8"));
+  assert(written.$schema === "./lazy-loader.schema.json", "Removing a lazy package must preserve the schema declaration");
+  assert(written.packages.length === 1, "Removing a lazy package must preserve other entries");
+  console.log("  ✓ Package catalog, proxy allowlists, deduplication, and removal verified");
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
 }
@@ -338,8 +261,8 @@ writeFileSync(join(e2ePackageDir, "index.js"), `export default function (pi) {
     execute() { return { content: [{ type: "text", text: "42" }], details: {} }; },
   });
 }`);
-writeFileSync(join(e2eAgentDir, "settings.json"), JSON.stringify({
-  packages: [{ source: "npm:pi-lazy-e2e-fixture", extensions: [] }],
+writeFileSync(join(e2eAgentDir, CONFIG_FILENAME), JSON.stringify({
+  packages: ["npm:pi-lazy-e2e-fixture"],
 }));
 
 const prompt = "Call the answer_42 tool and tell me the number it returned.";

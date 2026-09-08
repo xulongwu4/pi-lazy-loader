@@ -1,10 +1,11 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawn } from "node:child_process";
 
 import lazyLoaderExtension from "../index.js";
 import { LazyLoader } from "../src/loader.js";
-import { discoverLazyPackages } from "../src/resolver.js";
+import { CONFIG_FILENAME, readLazyLoaderConfig } from "../src/config.js";
 import {
   registerToolProxies,
   formatProxyGuidance,
@@ -12,6 +13,7 @@ import {
 } from "../src/tool-proxy.js";
 import {
   readCache,
+  selectCachedRegistrations,
   writeCache,
   updateCachedPackage,
   CACHE_FILENAME,
@@ -52,6 +54,9 @@ function fakePi(active: string[] = []) {
     registerCommand(name: string, command: any) {
       commands.set(name, command);
     },
+    getCommands() {
+      return Array.from(commands, ([name, command]) => ({ name, ...command }));
+    },
     on(event: string, handler: Function) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
@@ -85,7 +90,7 @@ const webCache: LazyLoaderCache = {
   },
 };
 
-console.log("=== Running v0.6.0 Tool Proxy Checks ===\n");
+console.log("=== Running v0.7.0 Tool Proxy Checks ===\n");
 
 // ---------------------------------------------------------------------------
 // Check 1: Cache-Driven Proxy Registration & Description
@@ -93,7 +98,7 @@ console.log("=== Running v0.6.0 Tool Proxy Checks ===\n");
 console.log("--- Check 1: Proxy Registration & Description ---");
 {
   const pi = fakePi();
-  const loader = new LazyLoader(pi as any, tmpdir(), false, [entry("pi-web-access")]);
+  const loader = new LazyLoader(pi as any, tmpdir(), [entry("pi-web-access")]);
   const cacheWithDesc: LazyLoaderCache = {
     version: 1,
     packages: {
@@ -134,7 +139,9 @@ console.log("--- Check 1: Proxy Registration & Description ---");
     "fetch_content description must contain next-step guidance"
   );
 
-  console.log("  ✓ Cached tools drive proxy registration and descriptions");
+  assert(selectCachedRegistrations(cacheWithDesc.packages["pi-web-access"].tools, []).length === 0, "empty allowlist must disable the proxy type");
+  assert(selectCachedRegistrations([], ["conditional_tool"])[0]?.name === "conditional_tool", "listed uncached names must still receive proxies");
+  console.log("  ✓ Cached tools, empty allowlists, and uncached explicit names drive proxy registration");
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +174,7 @@ console.log("--- Check 2: Proxy Loads Package, Does Not Execute, and Requests Re
 
     const active = ["fabric_exec", "lazy_load"];
     const pi = fakePi(active);
-    const loader = new LazyLoader(pi as any, root, false, [entry("pi-web-access")]);
+    const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
 
     const proxy = pi.tools.get("web_search");
@@ -245,7 +252,7 @@ console.log("--- Check 3: Package Load Publishes Staged Real Tools Replacing Pro
     (globalThis as any).__v050Chk3Factory = 0;
 
     const pi = fakePi();
-    const loader = new LazyLoader(pi as any, root, false, [entry("pi-web-access")]);
+    const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
 
     const searchProxy = pi.tools.get("web_search");
@@ -301,7 +308,7 @@ console.log("--- Check 4: Surviving Proxy in Loaded State Returns Terminal Cache
     );
 
     const pi = fakePi();
-    const loader = new LazyLoader(pi as any, root, false, [entry("pi-web-access")]);
+    const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
 
     const fetchProxy = pi.tools.get("fetch_content");
@@ -361,7 +368,7 @@ console.log("--- Check 5: Failed State Returns Terminal Reload Guidance ---");
 
     (globalThis as any).__v050Chk5Factory = 0;
     const pi = fakePi();
-    const loader = new LazyLoader(pi as any, root, false, [entry("pi-web-access")]);
+    const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
 
     const proxy = pi.tools.get("web_search");
@@ -415,7 +422,7 @@ console.log("--- Check 6: Collision with Existing Eager Tool Leaves Eager Protec
     const eager = { name: "web_search", description: "Genuine eager search tool", execute() {} };
     pi.registerTool(eager);
 
-    const loader = new LazyLoader(pi as any, root, false, [entry("pi-web-access")]);
+    const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     const diags = registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
 
     assert(pi.tools.get("web_search") === eager, "eager tool must not be displaced by proxy at startup");
@@ -451,7 +458,7 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
     );
 
     const pi = fakePi();
-    const loader = new LazyLoader(pi as any, root, false, [entry("pi-web-access")]);
+    const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
     await loader.loadPackage("pi-web-access");
 
@@ -475,7 +482,22 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
     writeFileSync(join(root, CACHE_FILENAME), JSON.stringify({ version: 99, packages: {} }), "utf-8");
     assert(Object.keys(readCache(root).packages).length === 0, "unknown cache version must fail soft");
 
-    console.log("  ✓ Unified cache captures all commands/tools and rejects corrupt or incomplete entries");
+    writeCache(root, { version: 1, packages: {} });
+    const cacheModule = new URL("../src/cache.ts", import.meta.url).href;
+    const exits = await Promise.all(Array.from({ length: 8 }, (_, index) =>
+      new Promise<number | null>((resolveExit) => {
+        const worker = spawn(process.execPath, [
+          "-e",
+          `import { updateCachedPackage } from ${JSON.stringify(cacheModule)}; updateCachedPackage(${JSON.stringify(root)}, "worker-${index}", [{ name: "tool-${index}" }], []);`,
+        ], { stdio: "ignore" });
+        worker.on("exit", resolveExit);
+      })
+    ));
+    assert(exits.every((code) => code === 0), "concurrent cache writers must exit successfully");
+    assert(Object.keys(readCache(root).packages).filter((name) => name.startsWith("worker-")).length === 8, "concurrent cache updates must preserve every package");
+    assert(!existsSync(join(root, `${CACHE_FILENAME}.lock`)), "cache lock must be cleaned up");
+
+    console.log("  ✓ Unified cache captures all registrations, rejects invalid entries, and preserves concurrent updates");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -486,6 +508,11 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
 // ---------------------------------------------------------------------------
 console.log("--- Check 8: Production lazy_load Restores Fabric Active Tools ---");
 {
+  const root = join(tmpdir(), `pi-lazy-v050-chk8-${Date.now()}`);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, CONFIG_FILENAME), JSON.stringify({ packages: [] }));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = root;
   const active = ["fabric_exec", "lazy_load"];
   const successPi = fakePi(active);
   const successLoader = lazyLoaderExtension(successPi as any);
@@ -526,13 +553,16 @@ console.log("--- Check 8: Production lazy_load Restores Fabric Active Tools ---"
     "production lazy_load must restore Fabric active tools after failure"
   );
 
+  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+  rmSync(root, { recursive: true, force: true });
   console.log("  ✓ Production lazy_load restores Fabric active tools after success and failure");
 }
 
 // ---------------------------------------------------------------------------
-// Check 9: Settings Discovery, Cache Bootstrap, and Cache-Driven Proxies
+// Check 9: Explicit Catalog, Cache Bootstrap, and Filtered Proxies
 // ---------------------------------------------------------------------------
-console.log("--- Check 9: General Package Discovery & Cache Bootstrap ---");
+console.log("--- Check 9: Explicit Catalog, Cache Bootstrap & Filtered Proxies ---");
 {
   const root = join(tmpdir(), `pi-lazy-v050-chk9-${Date.now()}`);
   mkdirSync(root, { recursive: true });
@@ -546,22 +576,28 @@ console.log("--- Check 9: General Package Discovery & Cache Bootstrap ---");
         pi.registerTool({ name: "arbitrary_one", description: "First arbitrary tool", execute() {} });
         pi.registerTool({ name: "arbitrary_two", description: "Second arbitrary tool", execute() {} });
         pi.registerCommand("arbitrary-command", { description: "Arbitrary command", handler() {} });
+        pi.registerCommand("hidden-command", { description: "Hidden command", handler() {} });
+        pi.registerCommand("colliding-command", { description: "Lazy collision", handler() {} });
       }
     `
     );
     fixture(root, "failing-pi-package", `export default function () { throw new Error("bootstrap failure"); }`);
     writeFileSync(
-      join(root, "settings.json"),
+      join(root, CONFIG_FILENAME),
       JSON.stringify({ packages: [
-        { source: "npm:arbitrary-pi-package@1.0.0", extensions: [] },
-        { source: "npm:failing-pi-package", extensions: [] },
+        {
+          source: "npm:arbitrary-pi-package@1.0.0",
+          commands: ["arbitrary-command", "colliding-command"],
+          tools: ["arbitrary_one"],
+        },
+        "npm:failing-pi-package",
       ] }),
       "utf-8"
     );
     process.env.PI_CODING_AGENT_DIR = root;
 
-    const discovered = discoverLazyPackages(root);
-    assert(discovered.length === 2, "arbitrary deferred packages must be discovered from settings");
+    const discovered = readLazyLoaderConfig(root).packages;
+    assert(discovered.length === 2, "configured lazy packages must be discovered from lazy-loader.json");
     assert(discovered[0].name === "arbitrary-pi-package", "package.json name must be used as cache identity");
 
     const firstPi = fakePi();
@@ -577,17 +613,28 @@ console.log("--- Check 9: General Package Discovery & Cache Bootstrap ---");
       JSON.stringify(cachedNames) === JSON.stringify(["arbitrary_one", "arbitrary_two"]),
       "cache bootstrap must capture every exposed tool"
     );
-    assert(cachedPackage?.commands[0]?.name === "arbitrary-command", "cache bootstrap must capture every exposed command");
+    assert(
+      JSON.stringify(cachedPackage?.commands.map((command) => command.name).sort()) ===
+        JSON.stringify(["arbitrary-command", "colliding-command", "hidden-command"]),
+      "cache bootstrap must capture every exposed command regardless of proxy filters"
+    );
 
     const secondPi = fakePi();
+    const eagerCommand = { description: "Existing eager command", handler() {} };
+    secondPi.registerCommand("colliding-command", eagerCommand);
     const secondLoader = lazyLoaderExtension(secondPi as any);
     await secondPi.emit("session_start", { type: "session_start", reason: "startup" }, { hasUI: false });
     assert(secondLoader.getPackageState("arbitrary-pi-package")?.status === "deferred", "cache hit must keep package deferred");
     assert(secondLoader.getPackageState("failing-pi-package")?.status === "deferred", "failed bootstrap marker must prevent repeated eager loading");
-    assert(secondPi.tools.has("arbitrary_one") && secondPi.tools.has("arbitrary_two"), "cached tools must create proxies");
-    assert(secondPi.commands.has("arbitrary-command"), "cached commands must create proxies");
+    assert(secondPi.tools.has("arbitrary_one"), "configured cached tool must create a proxy");
+    assert(!secondPi.tools.has("arbitrary_two"), "unlisted cached tool must not create a proxy");
+    assert(secondPi.commands.has("arbitrary-command"), "configured cached command must create a proxy");
+    assert(!secondPi.commands.has("hidden-command"), "unlisted cached command must not create a proxy");
+    assert(secondPi.commands.get("colliding-command") === eagerCommand, "existing command must not be replaced by a proxy");
+    await secondPi.tools.get("lazy_load").execute("load-collision", { package: "arbitrary-pi-package" });
+    assert(secondPi.commands.get("colliding-command") === eagerCommand, "loaded package must not replace protected eager command");
 
-    console.log("  ✓ Arbitrary settings package bootstraps once, caches every command/tool, then remains deferred");
+    console.log("  ✓ Explicit packages bootstrap once, cache every command/tool, and expose only configured proxies");
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -596,5 +643,5 @@ console.log("--- Check 9: General Package Discovery & Cache Bootstrap ---");
 }
 
 console.log("\n==============================================");
-console.log("ALL v0.6.0 TOOL PROXY CHECKS PASSED");
+console.log("ALL v0.7.0 TOOL PROXY CHECKS PASSED");
 console.log("==============================================");

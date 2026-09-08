@@ -1,6 +1,4 @@
 import { createJiti } from "jiti";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import * as piAgentCore from "@earendil-works/pi-agent-core";
 import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import * as piAiOauth from "@earendil-works/pi-ai/oauth";
@@ -12,7 +10,8 @@ import * as typeboxCompile from "typebox/compile";
 import * as typeboxValue from "typebox/value";
 
 import { findPackageDefinition, type PackageDefinition } from "./package.js";
-import { discoverLazyPackages, getUserAgentDir, resolvePackageEntries } from "./resolver.js";
+import { getUserAgentDir, resolvePackageEntries } from "./resolver.js";
+import { readLazyLoaderConfig } from "./config.js";
 import { updateCachedPackage, type CachedRegistration } from "./cache.js";
 import {
   type CommandDescriptionContext,
@@ -21,15 +20,14 @@ import {
 
 export interface ReserveCommandOptions {
   declaredDescription?: string;
-  targetLabel?: string;
   decorateDescription?: boolean;
 }
 
 export type PackageLoadStatus = "deferred" | "loading" | "loaded" | "failed";
-export type CommandStatus = "deferred" | "ready" | "ready (eager)" | "missing" | "failed" | "loading";
+export type CommandStatus = "deferred" | "ready" | "missing" | "failed" | "loading";
 
 export interface PackageState {
-  manifest: PackageDefinition;
+  definition: PackageDefinition;
   status: PackageLoadStatus;
   error?: string;
   loadedEntries: string[];
@@ -101,9 +99,9 @@ export class LazyLoader {
   private agentDir: string;
   private reservedCommands = new Map<string, Map<string, ReserveCommandOptions>>();
   private capturedCommands = new Map<string, Map<string, any>>();
+  private protectedCommands = new Map<string, Set<string>>();
   private reservedTools = new Map<string, Set<string>>();
   private protectedTools = new Map<string, Set<string>>();
-  private partialExtensionPackages = new Set<string>();
 
   private getCapturedCommand(packageName: string, commandName: string): any {
     return this.capturedCommands.get(packageName)?.get(commandName);
@@ -144,20 +142,19 @@ export class LazyLoader {
     }
   }
 
-  constructor(pi: any, agentDir?: string, syncSettings = true, packages?: PackageDefinition[]) {
+  constructor(pi: any, agentDir?: string, packages?: PackageDefinition[]) {
     this.pi = pi;
     this.agentDir = agentDir ?? getUserAgentDir();
 
-    for (const entry of packages ?? discoverLazyPackages(this.agentDir)) {
+    for (const entry of packages ?? readLazyLoaderConfig(this.agentDir).packages) {
       this.states.set(entry.name, {
-        manifest: entry,
+        definition: entry,
         status: "deferred",
         loadedEntries: [],
         newTools: [],
         missingTools: [],
       });
     }
-    if (syncSettings) this.syncConfiguredEager();
   }
 
   setSessionStart(event: any, ctx: any) {
@@ -172,50 +169,9 @@ export class LazyLoader {
     return this.lifecycleState;
   }
 
-  /** Mark packages whose extensions Pi already loaded eagerly, preventing duplicate factories. */
-  syncConfiguredEager(settingsPath = join(this.agentDir, "settings.json")): string[] {
-    let settings: any;
-    try {
-      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-    } catch {
-      return [];
-    }
-
-    this.partialExtensionPackages.clear();
-    const eagerSources = new Set<string>();
-    for (const item of settings?.packages ?? []) {
-      if (typeof item === "string") {
-        eagerSources.add(item);
-      } else if (item && typeof item.source === "string") {
-        if (Array.isArray(item.extensions)) {
-          if (item.extensions.length > 0) {
-            eagerSources.add(item.source);
-            const entry = this.getPackageState(item.source)?.manifest;
-            this.partialExtensionPackages.add(entry ? entry.name : item.source);
-          }
-        } else {
-          eagerSources.add(item.source);
-        }
-      }
-    }
-
-    const marked: string[] = [];
-    for (const state of this.states.values()) {
-      if (state.status === "deferred" && eagerSources.has(state.manifest.source)) {
-        state.status = "loaded";
-        state.loadedEntries = ["<configured eager>"];
-        marked.push(state.manifest.name);
-      }
-    }
-    return marked;
-  }
 
   getAgentDir(): string {
     return this.agentDir;
-  }
-
-  getPartialExtensionPackages(): string[] {
-    return Array.from(this.partialExtensionPackages);
   }
 
   getAllStates(): PackageState[] {
@@ -223,51 +179,59 @@ export class LazyLoader {
   }
 
   reserveCommand(identifier: string, commandName: string, metadata?: ReserveCommandOptions): void {
-    const manifest = this.getPackageState(identifier)?.manifest;
-    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
-    let names = this.reservedCommands.get(manifest.name);
+    const definition = this.getPackageState(identifier)?.definition;
+    if (!definition) throw new Error(`Unknown package "${identifier}"`);
+    let names = this.reservedCommands.get(definition.name);
     if (!names) {
       names = new Map<string, ReserveCommandOptions>();
-      this.reservedCommands.set(manifest.name, names);
+      this.reservedCommands.set(definition.name, names);
     }
     names.set(commandName, metadata ?? {});
   }
 
-  reserveTool(identifier: string, toolName: string): void {
-    const manifest = this.getPackageState(identifier)?.manifest;
-    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
-    let names = this.reservedTools.get(manifest.name);
+  protectCommand(identifier: string, commandName: string): void {
+    const definition = this.getPackageState(identifier)?.definition;
+    if (!definition) throw new Error(`Unknown package "${identifier}"`);
+    let names = this.protectedCommands.get(definition.name);
     if (!names) {
       names = new Set<string>();
-      this.reservedTools.set(manifest.name, names);
+      this.protectedCommands.set(definition.name, names);
+    }
+    names.add(commandName);
+  }
+
+  reserveTool(identifier: string, toolName: string): void {
+    const definition = this.getPackageState(identifier)?.definition;
+    if (!definition) throw new Error(`Unknown package "${identifier}"`);
+    let names = this.reservedTools.get(definition.name);
+    if (!names) {
+      names = new Set<string>();
+      this.reservedTools.set(definition.name, names);
     }
     names.add(toolName);
   }
 
   protectTool(identifier: string, toolName: string): void {
-    const manifest = this.getPackageState(identifier)?.manifest;
-    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
-    let names = this.protectedTools.get(manifest.name);
+    const definition = this.getPackageState(identifier)?.definition;
+    if (!definition) throw new Error(`Unknown package "${identifier}"`);
+    let names = this.protectedTools.get(definition.name);
     if (!names) {
       names = new Set<string>();
-      this.protectedTools.set(manifest.name, names);
+      this.protectedTools.set(definition.name, names);
     }
     names.add(toolName);
   }
 
   isCommandCaptured(identifier: string, commandName: string): boolean {
-    const manifest = this.getPackageState(identifier)?.manifest;
-    if (!manifest) return false;
-    return this.hasCapturedCommand(manifest.name, commandName);
+    const definition = this.getPackageState(identifier)?.definition;
+    if (!definition) return false;
+    return this.hasCapturedCommand(definition.name, commandName);
   }
 
   getCommandStatus(identifier: string, commandName: string): CommandStatus {
     const pkgState = this.getPackageState(identifier);
     if (!pkgState) return "deferred";
     if (pkgState.status === "loaded") {
-      if (pkgState.loadedEntries.includes("<configured eager>")) {
-        return "ready (eager)";
-      }
       return this.isCommandCaptured(identifier, commandName) ? "ready" : "missing";
     }
     if (pkgState.status === "failed") return "failed";
@@ -276,16 +240,16 @@ export class LazyLoader {
   }
 
   async invokeCapturedCommand(identifier: string, commandName: string, args: string, ctx: any): Promise<any> {
-    const manifest = this.getPackageState(identifier)?.manifest;
-    if (!manifest) throw new Error(`Unknown package "${identifier}"`);
-    const command = this.getCapturedCommand(manifest.name, commandName);
-    if (!command?.handler) throw new Error(`Package "${manifest.name}" did not register reserved command "${commandName}"`);
+    const definition = this.getPackageState(identifier)?.definition;
+    if (!definition) throw new Error(`Unknown package "${identifier}"`);
+    const command = this.getCapturedCommand(definition.name, commandName);
+    if (!command?.handler) throw new Error(`Package "${definition.name}" did not register reserved command "${commandName}"`);
     return await command.handler(args, ctx);
   }
 
   getPackageState(identifier: string): PackageState | undefined {
     const definition = findPackageDefinition(
-      Array.from(this.states.values(), (state) => state.manifest),
+      Array.from(this.states.values(), (state) => state.definition),
       identifier
     );
     return definition ? this.states.get(definition.name) : undefined;
@@ -300,27 +264,27 @@ export class LazyLoader {
    * - Replays missed session_start and resources_discover exactly once with real objects
    */
   async loadPackage(identifier: string): Promise<PackageLoadResult> {
-    const manifest = this.getPackageState(identifier)?.manifest;
-    if (!manifest) {
+    const definition = this.getPackageState(identifier)?.definition;
+    if (!definition) {
       return {
         success: false,
         status: "failed",
         package: identifier,
         source: identifier,
-        error: `Unknown package "${identifier}". Configure it with "extensions": [] before lazy loading.`,
+        error: `Unknown package "${identifier}". Add it to lazy-loader.json before lazy loading.`,
       };
     }
 
-    let pkgState = this.states.get(manifest.name);
+    let pkgState = this.states.get(definition.name);
     if (!pkgState) {
       pkgState = {
-        manifest,
+        definition,
         status: "deferred",
         loadedEntries: [],
         newTools: [],
         missingTools: [],
       };
-      this.states.set(manifest.name, pkgState);
+      this.states.set(definition.name, pkgState);
     }
 
     // 1. Idempotent check
@@ -329,8 +293,8 @@ export class LazyLoader {
         success: true,
         status: "loaded",
         alreadyLoaded: true,
-        package: manifest.name,
-        source: manifest.source,
+        package: definition.name,
+        source: definition.source,
         newTools: pkgState.newTools,
         missingTools: pkgState.missingTools.length > 0 ? pkgState.missingTools : undefined,
         entries: pkgState.loadedEntries,
@@ -343,9 +307,9 @@ export class LazyLoader {
       return {
         success: false,
         status: "failed",
-        package: manifest.name,
-        source: manifest.source,
-        error: `Package "${manifest.name}" failed previously in this session (${pkgState.error ?? "unknown error"}). Use /reload or restart the session to retry.`,
+        package: definition.name,
+        source: definition.source,
+        error: `Package "${definition.name}" failed previously in this session (${pkgState.error ?? "unknown error"}). Use /reload or restart the session to retry.`,
         loadMs: pkgState.loadMs,
       };
     }
@@ -362,7 +326,7 @@ export class LazyLoader {
     pkgState.loadPromise = (async (): Promise<PackageLoadResult> => {
       const t0 = Date.now();
       try {
-        const entries = resolvePackageEntries(manifest, this.agentDir);
+        const entries = resolvePackageEntries(definition, this.agentDir);
         const toolsBefore = new Set((this.pi?.getAllTools?.() ?? []).map((t: any) => t.name));
 
         const stagedRegistrations = new Map<string, any>();
@@ -373,7 +337,7 @@ export class LazyLoader {
         for (const entryPath of entries) {
           await this.loadSingleEntry(
             entryPath,
-            manifest.name,
+            definition.name,
             stagedRegistrations,
             stagedTools,
             observedTools,
@@ -384,20 +348,19 @@ export class LazyLoader {
 
         // Commit staged registrations atomically only after all entries and lifecycle replay succeeded
         for (const [name, targetOptions] of stagedRegistrations.entries()) {
-          this.setCapturedCommand(manifest.name, name, targetOptions);
+          this.setCapturedCommand(definition.name, name, targetOptions);
 
-          const meta = this.reservedCommands.get(manifest.name)?.get(name);
+          const meta = this.reservedCommands.get(definition.name)?.get(name);
           const shouldDecorate =
             meta?.decorateDescription ??
-            (meta?.declaredDescription !== undefined || meta?.targetLabel !== undefined);
+            meta?.declaredDescription !== undefined;
 
           let committedOptions: any;
           if (shouldDecorate) {
             const descCtx: CommandDescriptionContext = {
-              packageName: manifest.name,
+              packageName: definition.name,
               commandName: name,
               declaredDescription: meta?.declaredDescription,
-              targetLabel: meta?.targetLabel,
             };
             const decoratedDescription = formatPostLoadDescription(
               descCtx,
@@ -418,7 +381,7 @@ export class LazyLoader {
         for (const tool of stagedTools.values()) this.pi.registerTool(tool);
 
         // Track cached tools that disappeared from the loaded package
-        const reserved = this.reservedTools.get(manifest.name);
+        const reserved = this.reservedTools.get(definition.name);
         const missingTools: string[] = [];
         if (reserved) {
           for (const toolName of reserved) {
@@ -440,14 +403,14 @@ export class LazyLoader {
         pkgState.error = undefined;
 
         // Refresh every exposed command and tool for the next session.
-        this.refreshCache(manifest.name, observedTools, observedCommands);
+        this.refreshCache(definition.name, observedTools, observedCommands);
 
         return {
           success: true,
           status: "loaded",
           alreadyLoaded: false,
-          package: manifest.name,
-          source: manifest.source,
+          package: definition.name,
+          source: definition.source,
           newTools: finalTools,
           missingTools: missingTools.length > 0 ? missingTools : undefined,
           entries,
@@ -460,8 +423,8 @@ export class LazyLoader {
         return {
           success: false,
           status: "failed",
-          package: manifest.name,
-          source: manifest.source,
+          package: definition.name,
+          source: definition.source,
           error: pkgState.error,
           loadMs: pkgState.loadMs,
         };
@@ -523,6 +486,7 @@ export class LazyLoader {
           return (name: string, command: any) => {
             observedCommands?.set(name, command);
             refreshIfLoaded();
+            if (this.protectedCommands.get(packageName)?.has(name)) return;
             if (this.reservedCommands.get(packageName)?.has(name)) {
               if (stagedRegistrations) {
                 if (stagedRegistrations.has(name)) {
