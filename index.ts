@@ -169,9 +169,16 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   }
 
   // 2. Register cache-driven command proxies for deferred packages
-  // FR-3: Reserve ALL declared commands for deferred packages before registering any proxy
+  // FR-3: Reserve ALL declared command names for deferred packages before registering any proxy.
+  // NOTE: pi.getCommands() is an action method and MUST NOT be called during extension
+  // loading (runtime not initialized yet -> "Extension runtime not initialized" crash).
+  // Proxies also must not be registered blindly at load time: Pi resolves duplicate
+  // cross-extension commands as /name:1, /name:2 (Release Acceptance #12 forbids numeric
+  // suffixes), and the pre-bind command set is order-dependent. Reservation is
+  // internal-only and safe at load; proxy registration is deferred to session_start,
+  // where getCommands() is legal and sees the complete command set, so conflict
+  // outcomes are deterministic regardless of extension load order.
   const deferredDefinitions: MergedCommandDefinition[] = [];
-  const occupiedCommands = new Set((pi.getCommands?.() ?? []).map((command: any) => command.name));
   const packageDefinitions = new Map<string, MergedCommandDefinition[]>();
 
   for (const def of definitions) {
@@ -181,27 +188,25 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   }
 
   for (const [pkgName, defs] of packageDefinitions.entries()) {
-    if (loader.getPackageState(pkgName)?.status === "deferred") {
-      for (const def of defs) {
-        if (occupiedCommands.has(def.commandName)) {
-          loader.protectCommand(def.packageName, def.commandName);
-          const diagnostic = `Command proxy "/${def.commandName}" for "${def.packageName}" was skipped because that name is already registered`;
-          diagnostics.push(diagnostic);
-          console.error(`[pi-lazy-loader] ${diagnostic}`);
-          continue;
-        }
-        occupiedCommands.add(def.commandName);
-        loader.reserveCommand(def.packageName, def.commandName, {
-          declaredDescription: def.declaredDescription,
-          decorateDescription: true,
-        });
-        deferredDefinitions.push(def);
-      }
+    if (loader.getPackageState(pkgName)?.status !== "deferred") continue;
+    for (const def of defs) {
+      loader.reserveCommand(def.packageName, def.commandName, {
+        declaredDescription: def.declaredDescription,
+        decorateDescription: true,
+      });
+      deferredDefinitions.push(def);
     }
   }
 
-  // Register startup stubs
-  for (const def of deferredDefinitions) {
+  function reportSkippedProxy(packageName: string, commandName: string): string {
+    loader.protectCommand(packageName, commandName);
+    const diagnostic = `Command proxy "/${commandName}" for "${packageName}" was skipped because that name is already registered`;
+    diagnostics.push(diagnostic);
+    console.error(`[pi-lazy-loader] ${diagnostic}`);
+    return diagnostic;
+  }
+
+  function registerCommandProxy(def: MergedCommandDefinition): void {
     pi.registerCommand(def.commandName, {
       description: formatStartupDescription(def),
       getArgumentCompletions(_prefix: string) {
@@ -229,6 +234,36 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       },
     });
   }
+
+  // Post-bind proxy registration: runs in session_start where pi.getCommands() is legal.
+  // Names already taken (eager commands, built-ins, other extensions) register no proxy
+  // and are protected so a later package load cannot stage them either.
+  let commandProxiesRegistered = false;
+  pi.on("session_start", (_event: any, ctx: any) => {
+    if (commandProxiesRegistered) return;
+    commandProxiesRegistered = true;
+    let visible: Set<string>;
+    try {
+      visible = new Set((pi.getCommands?.() ?? []).map((c: any) => c.name));
+    } catch (error: any) {
+      console.error(`[pi-lazy-loader] command proxy registration skipped: ${error?.message ?? error}`);
+      return;
+    }
+    const fresh: string[] = [];
+    for (const def of deferredDefinitions) {
+      // Packages eagerly loaded by bootstrap own their real commands; no proxy needed.
+      if (loader.getPackageState(def.packageName)?.status === "loaded") continue;
+      if (visible.has(def.commandName)) {
+        fresh.push(reportSkippedProxy(def.packageName, def.commandName));
+        continue;
+      }
+      visible.add(def.commandName);
+      registerCommandProxy(def);
+    }
+    if (fresh.length > 0 && ctx?.hasUI) {
+      ctx.ui.notify(`pi-lazy-loader: ${fresh.join("; ")}`, "warning");
+    }
+  });
 
   // 3. Register slash command: /lazy (list | add <pkg> | pin <pkg>)
   pi.registerCommand("lazy", {
