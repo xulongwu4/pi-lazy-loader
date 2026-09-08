@@ -1,8 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "node:fs";
-import { Type } from "typebox";
 
-import { LazyLoader, type PackageLoadResult, type PackageState } from "./src/loader.js";
+import { LazyLoader, type PackageState } from "./src/loader.js";
 import { getUserAgentDir } from "./src/resolver.js";
 import { readLazyLoaderConfig, removeLazyPackage } from "./src/config.js";
 import {
@@ -80,10 +79,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   const report: any = reportPath
     ? {
         steps: [],
-        toolsBefore: [],
-        fabricPresentBefore: false,
-        newTools: [],
-        fabricPresentAfter: false,
         observedToolCalls: [],
         bootstrapErrors: [],
         sessionStartCaptured: false,
@@ -362,103 +357,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       const invalid = `Unknown /lazy subcommand "${subcommand}". Usage: /lazy [list | add <package> | pin <package>]`;
       if (ctx.hasUI) ctx.ui.notify(invalid, "error");
       console.error(invalid);
-    },
-  });
-
-  // 3. Register strict TypeBox tool: lazy_load
-  pi.registerTool({
-    name: "lazy_load",
-    label: "Lazy Load",
-    description: "Load a deferred Pi extension package on demand.",
-    parameters: Type.Object(
-      {
-        package: Type.String({
-          description: "Package name or source to load",
-        }),
-      },
-      { additionalProperties: false }
-    ),
-    async execute(_toolCallId, params, _signal, onUpdate) {
-      const activeBefore = pi.getActiveTools?.() ?? [];
-      const fabricActive = activeBefore.includes("fabric_exec");
-      if (report) {
-        const toolsBefore = (pi.getAllTools?.() ?? []).map((t: any) => t.name);
-        report.toolsBefore = toolsBefore;
-        report.fabricPresentBefore = toolsBefore.includes("fabric_exec");
-        report.steps.push({
-          step: "before_lazy_load",
-          fabricPresent: report.fabricPresentBefore,
-          toolCount: toolsBefore.length,
-          activeTools: pi.getActiveTools?.() ?? [],
-        });
-        saveReport();
-      }
-
-      onUpdate?.({
-        content: [{ type: "text", text: `Loading deferred package ${params.package}...` }],
-        details: {},
-      });
-
-      let result!: PackageLoadResult;
-      let toolsAfter: string[] = [];
-      try {
-        result = await loader.loadPackage(params.package);
-        // Let Fabric observe newly registered tools before restoring the native active set.
-        toolsAfter = (pi.getAllTools?.() ?? []).map((t: any) => t.name);
-      } finally {
-        if (fabricActive) pi.setActiveTools?.(activeBefore);
-      }
-
-      if (report) {
-        report.fabricPresentAfter = toolsAfter.includes("fabric_exec");
-        report.newTools = result.newTools ?? [];
-        report.steps.push({
-          step: "after_lazy_load",
-          package: params.package,
-          success: result.success,
-          fabricPresent: report.fabricPresentAfter,
-          toolCount: toolsAfter.length,
-          newTools: report.newTools,
-          loadMs: result.loadMs,
-          error: result.error,
-          activeTools: pi.getActiveTools?.() ?? [],
-        });
-        saveReport();
-      }
-
-      if (!result.success) {
-        return {
-          content: [{ type: "text", text: `Failed to load package "${params.package}": ${result.error}` }],
-          details: {
-            success: false,
-            package: params.package,
-            error: result.error,
-          },
-          isError: true,
-        };
-      }
-
-      let msg = result.alreadyLoaded
-        ? `Package "${result.package}" is already loaded.`
-        : `Successfully loaded package "${result.package}" in ${result.loadMs}ms. New tools: ${
-            result.newTools?.length ? result.newTools.join(", ") : "none"
-          }.`;
-      if (result.missingTools?.length) {
-        msg += ` Warning: Cached tools not registered: ${result.missingTools.join(", ")}.`;
-      }
-
-      return {
-        content: [{ type: "text", text: msg }],
-        details: {
-          success: true,
-          package: result.package,
-          source: result.source,
-          loadMs: result.loadMs,
-          newTools: result.newTools,
-          missingTools: result.missingTools,
-          alreadyLoaded: result.alreadyLoaded,
-        },
-      };
     },
   });
 

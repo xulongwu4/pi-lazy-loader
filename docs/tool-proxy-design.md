@@ -8,7 +8,7 @@
 
 A call to a declared tool of a deferred package should load that package, publish the real tool, and tell the model to retry. The proxy must not execute the original tool call or echo its arguments.
 
-`lazy_load` remains a separate, generic package-loading tool. It knows only how to load a requested package; retry guidance belongs to the tool proxy that knows which tool the model intended to invoke.
+Package loading is internal (`LazyLoader.loadPackage`, `/lazy add`, cache bootstrap). Retry guidance belongs to the tool proxy that knows which tool the model intended to invoke.
 
 ## Runtime Mechanics
 
@@ -43,9 +43,9 @@ If loading fails, staged reserved tools are discarded and the proxies remain. Pa
 - **Failed package:** The proxy returns terminal reload/restart guidance without retry guidance.
 - **Collision:** If an eager extension already owns a declared name, proxy registration is skipped and that name is protected from overwrite during deferred loading.
 
-### 5. Generic `lazy_load`
+### 5. Internal package load
 
-`lazy_load` has concise static metadata: load a deferred Pi extension package on demand. It accepts a package name or source and reports loading success, failure, new tools, and missing declared tools. It does not enumerate packages/tools and does not tell the model to retry another tool.
+`LazyLoader.loadPackage()` remains the internal load seam. `/lazy add` and cache bootstrap call it. There is no LLM-facing `lazy_load` tool; cached real-name proxies load deferred packages on first invocation.
 
 ### 6. Advisory Tool Cache (v3)
 
@@ -63,4 +63,4 @@ If loading fails, staged reserved tools are discarded and the proxies remain. Pa
 
 ### 7. Fabric Integration
 
-Both proxy-triggered loading and explicit `lazy_load` let Fabric observe newly registered tools before restoring the previous native active-tool set in `finally`.
+Proxy-triggered loading lets Fabric observe newly registered tools before restoring the previous native active-tool set in `finally`.

@@ -28,7 +28,7 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.7.1
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.8.0
 ```
 
 Declare lazy packages in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json`:
@@ -52,12 +52,12 @@ Declare lazy packages in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json`:
 - Explicit names absent from the cache still receive proxies, allowing conditional registrations to be requested.
 - `lazy-loader.schema.json` describes this format for editor validation.
 
-When Fabric captures extension tools, keep the loader prompt-visible in `~/.pi/agent/fabric.json`:
+When Fabric captures extension tools, keep only `fabric_exec` prompt-visible in `~/.pi/agent/fabric.json`:
 
 ```json
 {
   "capture": {
-    "keepVisible": ["fabric_exec", "lazy_load"]
+    "keepVisible": ["fabric_exec"]
   }
 }
 ```
@@ -90,7 +90,7 @@ Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(
 
 ### 4. Fabric Gateway Compatibility
 
-Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep `lazy_load` visible alongside `fabric_exec`; after each load the loader refreshes Fabric's catalog and restores that two-tool active set, preventing same-turn policy leaks.
+Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep only `fabric_exec` in Fabric `capture.keepVisible`; after each load a tool proxy refreshes Fabric's catalog and restores that active set, preventing same-turn policy leaks.
 
 A typical v0.7.0 `lazy-loader.json` defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
 
@@ -135,15 +135,8 @@ Only `${agentDir}/lazy-loader.json` is read. Pi `settings.json` and project-leve
 Changes to `lazy-loader.json` take effect after restarting Pi or issuing `/reload`. No filesystem watcher or background daemon is used.
 ### LLM Tools
 
-- **Direct tool proxies:** Load-and-retry startup proxies register under every cached tool name for deferred packages. Their descriptions use the cached real tool descriptions. Invoking a proxy loads its package without executing the requested tool, publishes the real tools, refreshes the package cache, and returns explicit retry guidance with `loaded: true`, `executed: false`, and `retryTool`. Caller arguments are never echoed.
-- `lazy_load`: Generic on-demand package loader with a strict TypeBox schema accepting a package name or source:
-  ```json
-  {
-    "package": "@quintinshaw/pi-dynamic-workflows"
-  }
-  ```
-  Dynamically loads the target package and makes its tools available in the same session. Under Fabric, the tools are captured as `extensions.*` while the native active set remains `fabric_exec` plus `lazy_load` (restored reliably via `finally`). Surviving stale-cache proxies return terminal drift guidance, and failed loads return terminal reload guidance.
-- **Sticky Session Failure**: If a package fails to load during a session, subsequent `lazy_load` calls fail fast without re-entering the load path. Retrying requires `/reload` or session restart.
+- **Direct tool proxies:** Load-and-retry startup proxies register under every cached tool name for deferred packages. Their descriptions use the cached real tool descriptions. Invoking a proxy loads its package without executing the requested tool, publishes the real tools, refreshes the package cache, and returns explicit retry guidance with `loaded: true`, `executed: false`, and `retryTool`. Caller arguments are never echoed. Under Fabric, loaded tools are captured as `extensions.*` while the native active set remains `fabric_exec` (restored reliably via `finally`). Surviving stale-cache proxies return terminal drift guidance, and failed loads return terminal reload guidance.
+- **Sticky Session Failure**: If a package fails to load during a session, subsequent proxy or `/lazy add` calls fail fast without re-entering the load path. Retrying requires `/reload` or session restart.
 
 ---
 
@@ -163,8 +156,7 @@ The suite covers:
 1. **File/Directory Entry Resolution**: Validates resolution of single files, directory conventions (`llm-wiki/index.ts`), and multi-file packages (`pi-quotas` 6 entries), plus error handling.
 2. **Idempotent & Concurrent State**: Proves 5 concurrent load requests share one promise, reload is idempotent, and partial failure is marked `failed`.
 3. **Safe Settings Pin Transform**: Proves unknown properties are preserved, writes are atomic, and missing/ambiguous entries are refused (tested strictly on temporary data; never modifies user settings).
-4. **Non-interactive End-to-End Proof**: Runs `pi` non-interactively with `google/gemini-3.8-flash`:
-   - `fabric_exec` is verified absent before lazy load.
-   - Model calls `lazy_load` for `pi-fabric`.
-   - `fabric_exec` is dynamically registered and executed in the same session (`return 40+2` -> `42`).
-   - Zero `"Pi Fabric has not bootstrapped"` errors.
+4. **Non-interactive End-to-End Proof**: Runs `pi` non-interactively:
+   - A missing-cache package is loaded eagerly at session start.
+   - The unified cache captures its exposed tool.
+   - The tool executes in the same session (`answer_42` -> `42`).

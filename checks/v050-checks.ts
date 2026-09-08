@@ -90,7 +90,7 @@ const webCache: LazyLoaderCache = {
   },
 };
 
-console.log("=== Running v0.7.0 Tool Proxy Checks ===\n");
+console.log("=== Running v0.8.0 Tool Proxy Checks ===\n");
 
 // ---------------------------------------------------------------------------
 // Check 1: Cache-Driven Proxy Registration & Description
@@ -172,7 +172,7 @@ console.log("--- Check 2: Proxy Loads Package, Does Not Execute, and Requests Re
     (globalThis as any).__v050FactoryCount = 0;
     (globalThis as any).__v050ExecCount = 0;
 
-    const active = ["fabric_exec", "lazy_load"];
+    const active = ["fabric_exec"];
     const pi = fakePi(active);
     const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
@@ -191,7 +191,7 @@ console.log("--- Check 2: Proxy Loads Package, Does Not Execute, and Requests Re
     assert(result.details.loaded === true, "details.loaded must be true");
     assert(result.details.executed === false, "details.executed must be false");
     assert(result.details.package === "pi-web-access", "details.package must match canonical package");
-    assert(result.details.loadTool === undefined, "loaded proxy result must not redirect through lazy_load");
+    assert(result.details.loadTool === undefined, "loaded proxy result must request a direct tool retry");
     assert(result.details.retryTool === "web_search", "details.retryTool must match declared tool name");
     assert(JSON.stringify(pi.restored.at(-1)) === JSON.stringify(active), "proxy load must restore Fabric active tools");
 
@@ -504,59 +504,31 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
 }
 
 // ---------------------------------------------------------------------------
-// Check 8: Production lazy_load Restores Fabric Active Tools
+// Check 8: Production Surface Has No lazy_load
 // ---------------------------------------------------------------------------
-console.log("--- Check 8: Production lazy_load Restores Fabric Active Tools ---");
+console.log("--- Check 8: Production Surface Has No lazy_load ---");
 {
   const root = join(tmpdir(), `pi-lazy-v050-chk8-${Date.now()}`);
   mkdirSync(root, { recursive: true });
-  writeFileSync(join(root, CONFIG_FILENAME), JSON.stringify({ packages: [] }));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = root;
-  const active = ["fabric_exec", "lazy_load"];
-  const successPi = fakePi(active);
-  const successLoader = lazyLoaderExtension(successPi as any);
-  (successLoader as any).loadPackage = async () => ({
-    success: true,
-    status: "loaded",
-    package: "pi-web-access",
-    source: "npm:pi-web-access",
-    newTools: ["web_search"],
-    missingTools: ["fetch_content"],
-    loadMs: 1,
-  });
-  const lazyLoad = successPi.tools.get("lazy_load");
-  assert(!lazyLoad.description.includes("pi-web-access"), "lazy_load description must not enumerate packages");
-  assert(!lazyLoad.description.includes("web_search"), "lazy_load description must not enumerate tools");
-  assert(!/retry|again/i.test(lazyLoad.description), "lazy_load description must not discuss tool retries");
-  const successResult = await lazyLoad.execute("load-success", { package: "pi-web-access" });
-  assert(successResult.details.success === true, "production lazy_load success path must complete");
-  assert(successResult.content[0].text.includes("fetch_content"), "production lazy_load must warn about missing cached tools");
-  assert(
-    JSON.stringify(successPi.restored.at(-1)) === JSON.stringify(active),
-    "production lazy_load must restore Fabric active tools after success"
-  );
-
-  const failurePi = fakePi(active);
-  const failureLoader = lazyLoaderExtension(failurePi as any);
-  (failureLoader as any).loadPackage = async () => ({
-    success: false,
-    status: "failed",
-    package: "pi-web-access",
-    source: "npm:pi-web-access",
-    error: "simulated failure",
-  });
-  const failureResult = await failurePi.tools.get("lazy_load").execute("load-failure", { package: "pi-web-access" });
-  assert(failureResult.isError === true, "production lazy_load failure path must report an error");
-  assert(
-    JSON.stringify(failurePi.restored.at(-1)) === JSON.stringify(active),
-    "production lazy_load must restore Fabric active tools after failure"
-  );
-
-  if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-  rmSync(root, { recursive: true, force: true });
-  console.log("  ✓ Production lazy_load restores Fabric active tools after success and failure");
+  try {
+    fixture(root, "pi-web-access", `export default function () {}`);
+    writeFileSync(join(root, CONFIG_FILENAME), JSON.stringify({ packages: ["npm:pi-web-access"] }));
+    writeCache(root, webCache);
+    process.env.PI_CODING_AGENT_DIR = root;
+    const pi = fakePi();
+    lazyLoaderExtension(pi as any);
+    assert(!pi.tools.has("lazy_load"), "production extension must not register lazy_load");
+    assert(pi.commands.has("lazy"), "production extension must register /lazy");
+    await pi.emit("session_start", { type: "session_start", reason: "startup" }, { hasUI: false });
+    assert(pi.tools.has("web_search"), "cached tool proxy must be registered");
+    assert(!pi.tools.has("lazy_load"), "session_start must not register lazy_load");
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  }
+  console.log("  ✓ Production extension has no lazy_load; /lazy and cached proxies remain");
 }
 
 // ---------------------------------------------------------------------------
@@ -631,7 +603,7 @@ console.log("--- Check 9: Explicit Catalog, Cache Bootstrap & Filtered Proxies -
     assert(secondPi.commands.has("arbitrary-command"), "configured cached command must create a proxy");
     assert(!secondPi.commands.has("hidden-command"), "unlisted cached command must not create a proxy");
     assert(secondPi.commands.get("colliding-command") === eagerCommand, "existing command must not be replaced by a proxy");
-    await secondPi.tools.get("lazy_load").execute("load-collision", { package: "arbitrary-pi-package" });
+    await secondLoader.loadPackage("arbitrary-pi-package");
     assert(secondPi.commands.get("colliding-command") === eagerCommand, "loaded package must not replace protected eager command");
 
     console.log("  ✓ Explicit packages bootstrap once, cache every command/tool, and expose only configured proxies");
@@ -643,5 +615,5 @@ console.log("--- Check 9: Explicit Catalog, Cache Bootstrap & Filtered Proxies -
 }
 
 console.log("\n==============================================");
-console.log("ALL v0.7.0 TOOL PROXY CHECKS PASSED");
+console.log("ALL v0.8.0 TOOL PROXY CHECKS PASSED");
 console.log("==============================================");

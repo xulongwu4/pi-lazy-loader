@@ -1,5 +1,7 @@
 # pi-lazy-loader: Implementation Summary and Phase 4 Design
 
+> Historical record of the v0.2.1 implementation and Phase 4 design. For current behavior, see [README.md](../README.md) and [development-status.md](development-status.md).
+
 ## Executive Summary
 
 `pi-lazy-loader` reduces Pi startup work by leaving selected package resources installed while filtering only their extension entry points with `"extensions": []`. A small eager extension loads those entry points later, in the running session, through jiti and Pi's live `ExtensionAPI`.
