@@ -141,6 +141,7 @@ function createMockPackageFixture(options: MockPackageFixtureOptions) {
 
   const registeredCommands = new Map<string, any>();
   const registeredTools = new Map<string, any>();
+  const sessionStartHandlers: Function[] = [];
   const mockPi: any = {
     registerTool(tool: any) {
       registeredTools.set(tool.name, tool);
@@ -162,7 +163,14 @@ function createMockPackageFixture(options: MockPackageFixtureOptions) {
       return [];
     },
     setActiveTools() {},
-    on() {},
+    on(event: string, handler: Function) {
+      if (event === "session_start") sessionStartHandlers.push(handler);
+    },
+    async emitSessionStart(ctx: any = { hasUI: false }) {
+      for (const handler of sessionStartHandlers) {
+        await handler({ type: "session_start", reason: "startup" }, ctx);
+      }
+    },
   };
 
   return {
@@ -203,8 +211,10 @@ const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
 try {
   process.env.PI_CODING_AGENT_DIR = fixture.root;
 
-  // Invoke the real default extension factory from index.ts against mock Pi and temp agent dir with pi-mcp-adapter deferred
+  // Invoke the real default extension factory from index.ts against mock Pi and temp agent dir with pi-mcp-adapter deferred.
+  // Command proxies register at session_start (pi.getCommands() is illegal during extension loading).
   lazyLoaderExtension(fixture.mockPi);
+  await fixture.mockPi.emitSessionStart();
 
   // Retrieve actual registered startup proxies from mockPi
   const startupMcp = fixture.registeredCommands.get("mcp");
