@@ -28,7 +28,7 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.7.0
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.7.1
 ```
 
 Declare lazy packages in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json`:

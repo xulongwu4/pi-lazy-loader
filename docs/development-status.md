@@ -1,12 +1,12 @@
 # pi-lazy-loader Development Status
 
-**Updated:** 2026-09-07
-**Released version:** `v0.7.0`
-**Release reference:** `v0.7.0`
+**Updated:** 2026-09-08
+**Released version:** `v0.7.1`
+**Release reference:** `v0.7.1`
 
 ## Executive Status
 
-`pi-lazy-loader` v0.7.0 is implemented, independently reviewed, merged to `main`, tagged, and pushed. It replaces the fixed package manifest and separate tool cache with an explicit lazy-loader package catalog and one unified command/tool cache.
+`pi-lazy-loader` v0.7.1 is implemented, independently reviewed on both axes, merged to `main`, tagged, and pushed. It fixes a startup crash present in v0.7.0: calling `pi.getCommands()` during extension loading threw `Extension runtime not initialized`, so Pi refused to start with `pi-lazy-loader` installed. Command proxy registration now happens in `session_start` (where action methods are legal) against the complete command set, keeping conflict outcomes deterministic and order-independent with no numeric-suffix duplicates.
 
 ## v0.7.0 Architecture
 
@@ -45,7 +45,12 @@ The cache is `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`:
 
 ## Review and Verification
 
-An `anthropic/claude-opus-5` subagent used the two-axis `code-review` skill. Its first pass requested changes; after atomic cache writes, command-collision protection, filter edge coverage, schema restoration, dead-code removal, and pin normalization, its second pass returned:
+An `openai-codex/gpt-5.6-sol` subagent used the two-axis `code-review` skill against the v0.7.1 diff. Round 1 requested changes on both axes (optimistic load-time registration risked `/name:1` suffixes; first-wins policy, order dependence, double notification). Round 2 requested changes (suffix-base indexing, fail-safe catch notification, report refresh). Round 3 returned:
+
+- **Standards:** `APPROVED` — zero blocking findings (later-handler collision window downgraded to residual risk: no in-repo extension registers commands from `session_start`; shape matches the shipped tool-proxy precedent).
+- **Specification:** `APPROVED` — zero blocking findings (Rule 9 once-only notification verified by an extended Check 6.2).
+
+The v0.7.0 review history is preserved below. An `anthropic/claude-opus-5` subagent used the two-axis `code-review` skill. Its first pass requested changes; after atomic cache writes, command-collision protection, filter edge coverage, schema restoration, dead-code removal, and pin normalization, its second pass returned:
 
 - **Standards:** `APPROVE` — zero blocking findings.
 - **Specification:** `APPROVE` — zero blocking findings.
@@ -96,6 +101,7 @@ src/tool-proxy.ts
 | `v0.5.0` | Consolidated load-and-retry tool proxies |
 | `v0.6.0` | Settings-driven packages and unified command/tool cache |
 | `v0.7.0` | Explicit lazy-loader catalog, proxy allowlists, atomic cache updates, and command collision protection |
+| `v0.7.1` | Fix startup crash (`Extension runtime not initialized`): reserve command names at load, register proxies in `session_start` against the complete command set; suffix-base suppression, fail-safe unbound-runtime handling, report refresh; Check 6 post-bind collision coverage |
 
 ## Known Limitations
 
@@ -107,4 +113,4 @@ src/tool-proxy.ts
 
 ## Current Decision
 
-`v0.7.0` is the active release baseline. `lazy-loader.json` is the explicit package catalog and optional command/tool proxy allowlist; Pi `settings.json` is not inspected. Upgrade the managed package reference and reload existing Pi sessions; the first session eagerly rebuilds the unified cache, and subsequent sessions defer cached packages normally.
+`v0.7.1` is the active release baseline. `lazy-loader.json` is the explicit package catalog and optional command/tool proxy allowlist; Pi `settings.json` is not inspected. Upgrade the managed package reference (`git:github.com/xulongwu4/pi-lazy-loader@v0.7.1`) and reload existing Pi sessions; the first session eagerly rebuilds the unified cache, and subsequent sessions defer cached packages normally.
