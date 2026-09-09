@@ -1,16 +1,6 @@
-import { createJiti } from "jiti";
-import * as piAgentCore from "@earendil-works/pi-agent-core";
-import * as piAiCompat from "@earendil-works/pi-ai/compat";
-import * as piAiOauth from "@earendil-works/pi-ai/oauth";
-import * as piAiProviders from "@earendil-works/pi-ai/providers/all";
-import * as piCodingAgent from "@earendil-works/pi-coding-agent";
-import * as piTui from "@earendil-works/pi-tui";
-import * as typebox from "typebox";
-import * as typeboxCompile from "typebox/compile";
-import * as typeboxValue from "typebox/value";
-
 import { findPackageDefinition, type PackageDefinition } from "./package.js";
-import { getUserAgentDir, resolvePackageEntries } from "./resolver.js";
+import { resolvePackageEntries } from "./resolver.js";
+import { getAgentDir, importExtensionFactory, replayMissedLifecycle } from "./pi-host.js";
 import { readLazyLoaderConfig } from "./config.js";
 import { updateCachedPackage, type CachedRegistration } from "./cache.js";
 import {
@@ -58,35 +48,6 @@ export interface CapturedLifecycleEvent {
 export interface LifecycleState {
   sessionStart: CapturedLifecycleEvent | null;
   resourcesDiscover: CapturedLifecycleEvent | null;
-}
-
-/**
- * Construct virtualModules map for jiti matching Pi runtime conventions.
- * Shares Pi's actual module instances to avoid duplicate instance conflicts.
- */
-export function createPiVirtualModules() {
-  return {
-    typebox,
-    "typebox/compile": typeboxCompile,
-    "typebox/value": typeboxValue,
-    "@sinclair/typebox": typebox,
-    "@sinclair/typebox/compile": typeboxCompile,
-    "@sinclair/typebox/value": typeboxValue,
-    "@earendil-works/pi-agent-core": piAgentCore,
-    "@earendil-works/pi-tui": piTui,
-    "@earendil-works/pi-ai": piAiCompat,
-    "@earendil-works/pi-ai/compat": piAiCompat,
-    "@earendil-works/pi-ai/oauth": piAiOauth,
-    "@earendil-works/pi-ai/providers/all": piAiProviders,
-    "@earendil-works/pi-coding-agent": piCodingAgent,
-    "@mariozechner/pi-agent-core": piAgentCore,
-    "@mariozechner/pi-tui": piTui,
-    "@mariozechner/pi-ai": piAiCompat,
-    "@mariozechner/pi-ai/compat": piAiCompat,
-    "@mariozechner/pi-ai/oauth": piAiOauth,
-    "@mariozechner/pi-ai/providers/all": piAiProviders,
-    "@mariozechner/pi-coding-agent": piCodingAgent,
-  };
 }
 
 export class LazyLoader {
@@ -144,7 +105,7 @@ export class LazyLoader {
 
   constructor(pi: any, agentDir?: string, packages?: PackageDefinition[]) {
     this.pi = pi;
-    this.agentDir = agentDir ?? getUserAgentDir();
+    this.agentDir = agentDir ?? getAgentDir();
 
     for (const entry of packages ?? readLazyLoaderConfig(this.agentDir).packages) {
       this.states.set(entry.name, {
@@ -447,16 +408,7 @@ export class LazyLoader {
     observedTools?: Map<string, any>,
     observedCommands?: Map<string, any>
   ): Promise<void> {
-    const jiti = createJiti(import.meta.url, {
-      moduleCache: false,
-      tryNative: false,
-      virtualModules: createPiVirtualModules(),
-    });
-
-    const factory = await jiti.import(entryPath, { default: true });
-    if (typeof factory !== "function") {
-      throw new Error(`Extension file "${entryPath}" does not export a default factory function (got ${typeof factory})`);
-    }
+    const factory = await importExtensionFactory(entryPath);
 
     // Proxy pi.on to capture handlers registered by this entry while registering them for future events
     const capturedHandlers: Array<{ event: string; handler: (...args: any[]) => any }> = [];
@@ -522,20 +474,6 @@ export class LazyLoader {
     // Invoke factory with live API proxy
     await factory(proxy);
 
-    // Replay already-fired lifecycle events exactly once using the real event objects
-    // Order: session_start first, then resources_discover
-    if (this.lifecycleState.sessionStart) {
-      const sessionStartHandlers = capturedHandlers.filter((h) => h.event === "session_start");
-      for (const { handler } of sessionStartHandlers) {
-        await handler(this.lifecycleState.sessionStart.event, this.lifecycleState.sessionStart.ctx);
-      }
-    }
-
-    if (this.lifecycleState.resourcesDiscover) {
-      const resourcesDiscoverHandlers = capturedHandlers.filter((h) => h.event === "resources_discover");
-      for (const { handler } of resourcesDiscoverHandlers) {
-        await handler(this.lifecycleState.resourcesDiscover.event, this.lifecycleState.resourcesDiscover.ctx);
-      }
-    }
+    await replayMissedLifecycle(capturedHandlers, this.lifecycleState);
   }
 }

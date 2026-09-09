@@ -1,62 +1,19 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { PackageDefinition } from "./package.js";
-import { npmPackageName, stripGitRef } from "./package-locator.js";
+import { npmPackageName } from "./package-locator.js";
+import { getAgentDir, resolvePackageRoot } from "./pi-host.js";
 
-/**
- * Get the agent directory where user packages are installed.
- * Respects PI_CODING_AGENT_DIR with home-dir expansion, fallback to ~/.pi/agent.
- */
-export function getUserAgentDir(): string {
-  const envDir = process.env.PI_CODING_AGENT_DIR;
-  if (envDir) {
-    if (envDir.startsWith("~")) {
-      return resolve(homedir(), envDir.slice(1).replace(/^[/\\]/, ""));
-    }
-    return resolve(envDir);
-  }
-  return join(homedir(), ".pi", "agent");
-}
+export { resolvePackageRoot };
 
 /** Resolve one configured package source to its installed package identity. */
-export function resolvePackageDefinition(source: string, agentDir = getUserAgentDir()): PackageDefinition {
+export function resolvePackageDefinition(source: string, agentDir = getAgentDir()): PackageDefinition {
   const root = resolvePackageRoot(source, agentDir);
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
   const name = typeof pkg.name === "string" && pkg.name.trim() ? pkg.name.trim() : source;
   const aliases = [name, source];
   if (source.startsWith("npm:")) aliases.push(npmPackageName(source.slice(4)));
   return { name, source, aliases: aliases.map((alias) => alias.toLowerCase()) };
-}
-
-/**
- * Resolve package root on disk for an npm or git package locator.
- */
-export function resolvePackageRoot(source: string, agentDir?: string): string {
-  const baseDir = agentDir ?? getUserAgentDir();
-  const trimmed = source.trim();
-
-  let root: string;
-  if (trimmed.startsWith("npm:")) {
-    const pkgName = npmPackageName(trimmed.slice(4).trim());
-    root = join(baseDir, "npm", "node_modules", pkgName);
-  } else if (trimmed.startsWith("git:")) {
-    const gitSpec = stripGitRef(trimmed.slice(4).trim()).replace(/\.git$/, "");
-    root = join(baseDir, "git", gitSpec);
-  } else if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) {
-    const url = new URL(trimmed);
-    const gitPath = stripGitRef(url.pathname.replace(/^\//, "")).replace(/\.git$/, "");
-    root = join(baseDir, "git", url.host, gitPath);
-  } else if (existsSync(resolve(baseDir, trimmed))) {
-    root = resolve(baseDir, trimmed);
-  } else {
-    throw new Error(`Unrecognized or non-existent package locator: "${source}"`);
-  }
-
-  if (!existsSync(root)) {
-    throw new Error(`Package root directory not found at "${root}". Is package "${source}" installed?`);
-  }
-  return root;
 }
 
 /**

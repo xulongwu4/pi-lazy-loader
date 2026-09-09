@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { writeFileSync } from "node:fs";
 
 import { LazyLoader, type PackageState } from "./src/loader.js";
-import { getUserAgentDir } from "./src/resolver.js";
+import { addVisibleCommandName, getAgentDir } from "./src/pi-host.js";
 import { readLazyLoaderConfig, removeLazyPackage } from "./src/config.js";
 import {
   buildCommandDefinitions,
@@ -55,7 +55,7 @@ export function formatPackageList(
 }
 
 export default function lazyLoaderExtension(pi: ExtensionAPI) {
-  const agentDir = getUserAgentDir();
+  const agentDir = getAgentDir();
   const configured = readLazyLoaderConfig(agentDir);
   const lazyPackages = configured.packages;
   const loader = new LazyLoader(pi, agentDir, lazyPackages);
@@ -240,13 +240,8 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     // Index both resolved names and their numeric-suffix bases: if Pi already resolved
     // a duplicate as /name:1, a new /name proxy would only produce /name:2.
     const visible = new Set<string>();
-    const markVisible = (name: string) => {
-      visible.add(name);
-      const base = /^(.*):\d+$/.exec(name)?.[1];
-      if (base) visible.add(base);
-    };
     try {
-      for (const command of pi.getCommands?.() ?? []) markVisible(command.name);
+      for (const command of pi.getCommands?.() ?? []) addVisibleCommandName(visible, command.name);
     } catch (error: any) {
       const diagnostic = `command proxy registration skipped: ${error?.message ?? error}`;
       diagnostics.push(diagnostic);

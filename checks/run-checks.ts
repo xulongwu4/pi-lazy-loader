@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { getUserAgentDir, resolvePackageDefinition, resolvePackageEntries, resolvePackageRoot } from "../src/resolver.js";
+import { getAgentDir } from "../src/pi-host.js";
+import { resolvePackageDefinition, resolvePackageEntries, resolvePackageRoot } from "../src/resolver.js";
 import { LazyLoader } from "../src/loader.js";
 import { CONFIG_FILENAME, readLazyLoaderConfig, removeLazyPackage } from "../src/config.js";
 import { readCache } from "../src/cache.js";
@@ -20,7 +21,7 @@ console.log("=== Running Phase 2 Verification Checks ===\n");
 // CHECK 1: File / Directory Entry Resolution
 // -----------------------------------------------------------------------------
 console.log("--- Check 1: File and Directory Entry Resolution ---");
-const agentDir = getUserAgentDir();
+const agentDir = getAgentDir();
 console.log(`Agent directory: ${agentDir}`);
 
 const lazyPackages = ["npm:pi-fabric", "npm:pi-web-access", "npm:pi-mcp-adapter", "npm:pi-token-burden"].map((source) =>

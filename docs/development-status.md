@@ -1,10 +1,12 @@
 # pi-lazy-loader Development Status
 
-**Updated:** 2026-09-08
-**Released version:** `v0.8.0`
-**Release reference:** `v0.8.0`
+**Updated:** 2026-09-09
+**Released version:** `v0.8.1`
+**Release reference:** `v0.8.1`
 
 ## Executive Status
+
+`pi-lazy-loader` v0.8.1 is implemented, independently reviewed, merged to `main`, tagged, and pushed. It isolates the Pi late-load ABI in `src/pi-host.ts`: `getAgentDir`, `resolvePackageRoot`, the `jiti` `virtualModules` wiring, missed-lifecycle replay, and `:N` occupancy handling for visible command names now live behind one host boundary instead of being spread across `src/loader.ts`, `src/resolver.ts`, and `index.ts`. Behavior is unchanged; the extraction narrows the surface that must be revisited when Pi's runtime ABI shifts.
 
 `pi-lazy-loader` v0.8.0 is implemented, independently reviewed, merged to `main`, tagged, and pushed. It removes the LLM-facing `lazy_load` tool. Cached real-name tool proxies load deferred extensions; `/lazy add`, cache bootstrap, command proxies, and `LazyLoader.loadPackage()` remain. Fabric `keepVisible` is only `fabric_exec`.
 
@@ -46,6 +48,11 @@ The cache is `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`:
 - Reserved registrations are staged so failed multi-entry loads do not displace startup proxies.
 
 ## Review and Verification
+
+The v0.8.1 extraction was reviewed on both axes:
+
+- **Standards:** `APPROVED` — zero blocking findings.
+- **Specification:** `APPROVED` — pure extraction, no behavior change and no scope creep.
 
 The v0.8.0 change was implemented by an `xai/grok-4.6` subagent and revised after parent review. Final parent review and parallel `anthropic/claude-opus-5` reviews returned:
 
@@ -110,6 +117,7 @@ src/tool-proxy.ts
 | `v0.7.0` | Explicit lazy-loader catalog, proxy allowlists, atomic cache updates, and command collision protection |
 | `v0.7.1` | Fix startup crash (`Extension runtime not initialized`): reserve command names at load, register proxies in `session_start` against the complete command set; suffix-base suppression, fail-safe unbound-runtime handling, report refresh; Check 6 post-bind collision coverage |
 | `v0.8.0` | Remove LLM-facing `lazy_load`; cached real-name tool proxies load deferred packages; Fabric `keepVisible` is only `fabric_exec` |
+| `v0.8.1` | Isolate the Pi late-load ABI in `src/pi-host.ts` (`getAgentDir`, `resolvePackageRoot`, `jiti` `virtualModules`, lifecycle replay, `:N` occupancy) |
 
 ## Known Limitations
 
@@ -121,4 +129,4 @@ src/tool-proxy.ts
 
 ## Current Decision
 
-`v0.8.0` is the active release baseline. There is no LLM-facing `lazy_load` tool; cached real-name proxies load deferred packages. `lazy-loader.json` remains the explicit package catalog and optional command/tool proxy allowlist; Pi `settings.json` is not inspected. Upgrade the managed package reference (`git:github.com/xulongwu4/pi-lazy-loader@v0.8.0`) and reload existing Pi sessions; the first session eagerly rebuilds the unified cache, and subsequent sessions defer cached packages normally.
+`v0.8.1` is the active release baseline. All Pi late-load ABI contact points are isolated in `src/pi-host.ts`; `src/loader.ts`, `src/resolver.ts`, and `index.ts` consume that boundary. Behavior is identical to `v0.8.0`. There is no LLM-facing `lazy_load` tool; cached real-name proxies load deferred packages. `lazy-loader.json` remains the explicit package catalog and optional command/tool proxy allowlist; Pi `settings.json` is not inspected. Upgrade the managed package reference (`git:github.com/xulongwu4/pi-lazy-loader@v0.8.1`) and reload existing Pi sessions; the first session eagerly rebuilds the unified cache, and subsequent sessions defer cached packages normally.
