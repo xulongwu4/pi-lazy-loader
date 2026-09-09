@@ -558,17 +558,23 @@ console.log("--- Check 6: Post-Bind Collision Semantics ---");
 // -----------------------------------------------------------------------------
 console.log("--- Check 4b: Hide reserved names from getCommands during load ---");
 {
+  const skipFactory = `export default function (pi) {
+    const maybeRegister = () => {
+      const taken = (pi.getCommands?.() ?? []).some((c) => c.name === "deep-research");
+      if (!taken) {
+        pi.registerCommand("deep-research", {
+          description: "Research a question",
+          handler() { return "researched"; },
+        });
+      }
+    };
+    maybeRegister();
+    pi.on("session_start", () => maybeRegister());
+  }`;
+
   const skipFixture = createMockPackageFixture({
     packageName: "skip-if-present",
-    indexJs: `export default function (pi) {
-    const taken = (pi.getCommands?.() ?? []).some((c) => c.name === "deep-research");
-    if (!taken) {
-      pi.registerCommand("deep-research", {
-        description: "Research a question",
-        handler() { return "researched"; },
-      });
-    }
-  }`,
+    indexJs: skipFactory,
   });
   try {
     const loader = new LazyLoader(skipFixture.mockPi, skipFixture.root);
@@ -577,6 +583,7 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
       description: "proxy",
       handler() { return "proxy"; },
     });
+    loader.setSessionStart({ type: "session_start" }, { hasUI: false });
 
     const loaded = await loader.loadPackage("skip-if-present");
     assert(loaded.success, `load must succeed, got: ${loaded.error}`);
@@ -589,8 +596,43 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
     const cached = readCache(skipFixture.root).packages["skip-if-present"]?.commands.map((c) => c.name) ?? [];
     assert(cached.includes("deep-research"), `cache must keep the reserved command, got: ${cached.join(", ")}`);
     console.log("  ✓ Reserved proxy names are hidden from getCommands so skip-if-registered factories still capture");
+    console.log("  ✓ Replayed session_start does not re-register a just-captured reserved command");
   } finally {
     skipFixture.cleanup();
+  }
+}
+{
+  const collideFixture = createMockPackageFixture({
+    packageName: "skip-if-present",
+    indexJs: `export default function (pi) {
+    const taken = (pi.getCommands?.() ?? []).some((c) => c.name === "deep-research");
+    if (!taken) {
+      pi.registerCommand("deep-research", {
+        description: "should not register",
+        handler() { return "guest"; },
+      });
+    }
+  }`,
+  });
+  try {
+    const loader = new LazyLoader(collideFixture.mockPi, collideFixture.root);
+    loader.reserveCommand("skip-if-present", "deep-research", { declaredDescription: "Research" });
+    loader.protectCommand("skip-if-present", "deep-research");
+    const eager = {
+      description: "eager owner",
+      handler() { return "eager"; },
+    };
+    collideFixture.registeredCommands.set("deep-research", eager);
+
+    const loaded = await loader.loadPackage("skip-if-present");
+    assert(loaded.success, `protected load must succeed, got: ${loaded.error}`);
+    assert(!loader.isCommandCaptured("skip-if-present", "deep-research"), "protected name must not be captured");
+    assert(collideFixture.registeredCommands.get("deep-research") === eager, "eager owner must remain");
+    const cached = readCache(collideFixture.root).packages["skip-if-present"]?.commands.map((c) => c.name) ?? [];
+    assert(!cached.includes("deep-research"), `cache must not claim a protected command, got: ${cached.join(", ")}`);
+    console.log("  ✓ Protected foreign owners stay visible so skip-if-registered factories do not steal them");
+  } finally {
+    collideFixture.cleanup();
   }
 }
 

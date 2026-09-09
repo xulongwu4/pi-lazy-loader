@@ -466,14 +466,22 @@ export class LazyLoader {
             return target.on(event, handler);
           };
         }
-        // Hide this package's reserved names so factories that skip
-        // already-registered commands still call registerCommand.
-        if (prop === "getCommands") {
+        // Hide this package's uncommitted reserved proxies so skip-if-registered
+        // factories still call registerCommand once. Leave protected names and
+        // already-observed names visible so a later check does not re-register.
+        if (prop === "getCommands" && typeof target.getCommands === "function") {
           return (...args: any[]) => {
-            const commands = typeof target.getCommands === "function" ? target.getCommands(...args) : [];
+            const commands = target.getCommands(...args);
             const reserved = this.reservedCommands.get(packageName);
             if (!reserved?.size || !Array.isArray(commands)) return commands;
-            return commands.filter((command: any) => !reserved.has(command?.name));
+            const protectedNames = this.protectedCommands.get(packageName);
+            return commands.filter((command: any) => {
+              const name = command?.name;
+              if (!name || !reserved.has(name)) return true;
+              if (protectedNames?.has(name)) return true;
+              if (observedCommands?.has(name)) return true;
+              return false;
+            });
           };
         }
         const val = Reflect.get(target, prop, receiver);
