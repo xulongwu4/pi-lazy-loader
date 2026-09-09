@@ -1,10 +1,12 @@
 # pi-lazy-loader Development Status
 
 **Updated:** 2026-09-09
-**Released version:** `v0.8.1`
-**Release reference:** `v0.8.1`
+**Released version:** `v0.8.2`
+**Release reference:** `v0.8.2`
 
 ## Executive Status
+
+`pi-lazy-loader` v0.8.2 is implemented, independently reviewed, merged to `main`, and tagged. During intercepted package load, `getCommands()` hides this package's uncommitted reserved command proxies so skip-if-registered factories (notably pi-dynamic-workflows builtins such as `/deep-research`) still call `registerCommand`. Protected foreign owners and already-observed names stay visible, so a replayed `session_start` does not re-register and abort, and `refreshCache` does not drop or steal those names.
 
 `pi-lazy-loader` v0.8.1 is implemented, independently reviewed, merged to `main`, tagged, and pushed. It isolates the Pi late-load ABI in `src/pi-host.ts`: `getAgentDir`, `resolvePackageRoot`, the `jiti` `virtualModules` wiring, missed-lifecycle replay, and `:N` occupancy handling for visible command names now live behind one host boundary instead of being spread across `src/loader.ts`, `src/resolver.ts`, and `index.ts`. Behavior is unchanged; the extraction narrows the surface that must be revisited when Pi's runtime ABI shifts.
 
@@ -48,6 +50,11 @@ The cache is `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`:
 - Reserved registrations are staged so failed multi-entry loads do not displace startup proxies.
 
 ## Review and Verification
+
+The v0.8.2 change was reviewed by parallel `anthropic/claude-opus-5` and `openai-codex/gpt-5.6-sol` subagents. Round 1 requested changes (the filter stayed after staging so `session_start` replay re-registered and aborted; protected names were hidden so a foreign owner could be claimed in the cache; Check 4b covered only the happy path). Round 2 returned:
+
+- **Standards:** `APPROVE` — zero blocking findings.
+- **Specification:** `APPROVE` — zero blocking findings.
 
 The v0.8.1 extraction was reviewed on both axes:
 
@@ -118,6 +125,7 @@ src/tool-proxy.ts
 | `v0.7.1` | Fix startup crash (`Extension runtime not initialized`): reserve command names at load, register proxies in `session_start` against the complete command set; suffix-base suppression, fail-safe unbound-runtime handling, report refresh; Check 6 post-bind collision coverage |
 | `v0.8.0` | Remove LLM-facing `lazy_load`; cached real-name tool proxies load deferred packages; Fabric `keepVisible` is only `fabric_exec` |
 | `v0.8.1` | Isolate the Pi late-load ABI in `src/pi-host.ts` (`getAgentDir`, `resolvePackageRoot`, `jiti` `virtualModules`, lifecycle replay, `:N` occupancy) |
+| `v0.8.2` | Hide uncommitted reserved command proxies from `getCommands()` during load so skip-if-registered factories still capture; protected and already-observed names stay visible |
 
 ## Known Limitations
 
@@ -129,4 +137,4 @@ src/tool-proxy.ts
 
 ## Current Decision
 
-`v0.8.1` is the active release baseline. All Pi late-load ABI contact points are isolated in `src/pi-host.ts`; `src/loader.ts`, `src/resolver.ts`, and `index.ts` consume that boundary. Behavior is identical to `v0.8.0`. There is no LLM-facing `lazy_load` tool; cached real-name proxies load deferred packages. `lazy-loader.json` remains the explicit package catalog and optional command/tool proxy allowlist; Pi `settings.json` is not inspected. Upgrade the managed package reference (`git:github.com/xulongwu4/pi-lazy-loader@v0.8.1`) and reload existing Pi sessions; the first session eagerly rebuilds the unified cache, and subsequent sessions defer cached packages normally.
+`v0.8.2` is the active release baseline. During intercepted package load, `getCommands()` hides uncommitted reserved command proxies so skip-if-registered factories still call `registerCommand`; protected foreign owners and already-observed names stay visible. All Pi late-load ABI contact points remain isolated in `src/pi-host.ts`. There is no LLM-facing `lazy_load` tool; cached real-name proxies load deferred packages. `lazy-loader.json` remains the explicit package catalog and optional command/tool proxy allowlist; Pi `settings.json` is not inspected. Upgrade the managed package reference (`git:github.com/xulongwu4/pi-lazy-loader@v0.8.2`) and reload existing Pi sessions; the first session eagerly rebuilds the unified cache, and subsequent sessions defer cached packages normally.
