@@ -466,6 +466,16 @@ export class LazyLoader {
             return target.on(event, handler);
           };
         }
+        // Hide this package's reserved names so factories that skip
+        // already-registered commands still call registerCommand.
+        if (prop === "getCommands") {
+          return (...args: any[]) => {
+            const commands = typeof target.getCommands === "function" ? target.getCommands(...args) : [];
+            const reserved = this.reservedCommands.get(packageName);
+            if (!reserved?.size || !Array.isArray(commands)) return commands;
+            return commands.filter((command: any) => !reserved.has(command?.name));
+          };
+        }
         const val = Reflect.get(target, prop, receiver);
         return typeof val === "function" ? val.bind(target) : val;
       },

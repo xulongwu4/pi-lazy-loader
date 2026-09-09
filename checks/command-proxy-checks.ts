@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import type { PackageDefinition } from "../src/package.js";
-import { writeCache } from "../src/cache.js";
+import { readCache, writeCache } from "../src/cache.js";
 import { buildCommandDefinitions } from "../src/command-config.js";
 import { LazyLoader } from "../src/loader.js";
 import lazyLoaderExtension from "../index.js";
@@ -551,6 +551,47 @@ console.log("--- Check 6: Post-Bind Collision Semantics ---");
 
 } finally {
   readyFixture.cleanup();
+}
+
+// -----------------------------------------------------------------------------
+// CHECK 4b: Reserved names hidden from getCommands during load
+// -----------------------------------------------------------------------------
+console.log("--- Check 4b: Hide reserved names from getCommands during load ---");
+{
+  const skipFixture = createMockPackageFixture({
+    packageName: "skip-if-present",
+    indexJs: `export default function (pi) {
+    const taken = (pi.getCommands?.() ?? []).some((c) => c.name === "deep-research");
+    if (!taken) {
+      pi.registerCommand("deep-research", {
+        description: "Research a question",
+        handler() { return "researched"; },
+      });
+    }
+  }`,
+  });
+  try {
+    const loader = new LazyLoader(skipFixture.mockPi, skipFixture.root);
+    loader.reserveCommand("skip-if-present", "deep-research", { declaredDescription: "Research" });
+    skipFixture.registeredCommands.set("deep-research", {
+      description: "proxy",
+      handler() { return "proxy"; },
+    });
+
+    const loaded = await loader.loadPackage("skip-if-present");
+    assert(loaded.success, `load must succeed, got: ${loaded.error}`);
+    assert(
+      loader.isCommandCaptured("skip-if-present", "deep-research"),
+      "target must registerCommand despite getCommands listing the proxy"
+    );
+    const result = await loader.invokeCapturedCommand("skip-if-present", "deep-research", "", {});
+    assert(result === "researched", `captured handler must run, got: ${result}`);
+    const cached = readCache(skipFixture.root).packages["skip-if-present"]?.commands.map((c) => c.name) ?? [];
+    assert(cached.includes("deep-research"), `cache must keep the reserved command, got: ${cached.join(", ")}`);
+    console.log("  ✓ Reserved proxy names are hidden from getCommands so skip-if-registered factories still capture");
+  } finally {
+    skipFixture.cleanup();
+  }
 }
 
 // -----------------------------------------------------------------------------
