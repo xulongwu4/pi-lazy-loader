@@ -1,10 +1,12 @@
 # pi-lazy-loader Development Status
 
-**Updated:** 2026-09-09
-**Released version:** `v0.8.2`
-**Release reference:** `v0.8.2`
+**Updated:** 2026-09-13
+**Released version:** `v0.9.0`
+**Release reference:** `v0.9.0`
 
 ## Executive Status
+
+`pi-lazy-loader` v0.9.0 is implemented, verified, and tagged. Cached tool proxies are now load-then-invoke: when the cached contract is safe (JSON-representable object schema, no `prepareArguments`, and live schema/`executionMode`/`constrainedSampling` deep-equal the cache after load), the proxy loads the package and executes the captured tool on the first deferred call, eliminating the previous mandatory retry round-trip. The cache now stores full tool parameter schemas plus execution metadata, guarded by `isCachedToolSchema`, `schemaIsJsonRepresentable` (fails closed on cycles, functions, symbols, non-finite numbers, class instances, and unknown TypeBox `~` keys), `cloneJsonValue`, and `schemasEquivalent`. Unsafe or drifted contracts return `executed: false` `retryHandoff`; missing tools and failed loads stay terminal (`cacheDrift` / `loadFailure`). Late reserved tool/command registrations gained the same commit/stage path as commands (`commitReservedTool`), a typed `CacheDriftError`, debounced per-package cache refreshes, and `getAllTools`/`getActiveTools` interception so uncommitted reserved names stay hidden from skip-if-registered factories.
 
 `pi-lazy-loader` v0.8.2 is implemented, independently reviewed, merged to `main`, and tagged. During intercepted package load, `getCommands()` hides this package's uncommitted reserved command proxies so skip-if-registered factories (notably pi-dynamic-workflows builtins such as `/deep-research`) still call `registerCommand`. Protected foreign owners and already-observed names stay visible, so a replayed `session_start` does not re-register and abort, and `refreshCache` does not drop or steal those names.
 
@@ -45,7 +47,7 @@ The cache is `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`:
 ### Proxy Behavior
 
 - Cached command names receive lightweight slash-command proxies. Their first invocation loads the package and invokes the captured real handler immediately.
-- Cached tool names receive load-and-retry proxies. Their first invocation loads the package without executing the requested tool and asks the caller to retry using the real loaded schema.
+- Cached tool names receive load-then-invoke proxies when the cached contract is safe (JSON schema, no `prepareArguments`, live schema/options match). Otherwise the first call loads/registers and returns `executed: false` `retryHandoff`; the model must call again against the live host schema. Missing tools and failed loads stay terminal (`cacheDrift` / `loadFailure`).
 - Package loads remain idempotent and concurrent callers share one in-flight promise.
 - Reserved registrations are staged so failed multi-entry loads do not displace startup proxies.
 

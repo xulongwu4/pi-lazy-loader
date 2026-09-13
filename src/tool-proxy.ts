@@ -1,16 +1,21 @@
 import { Type } from "typebox";
 
 import type { PackageDefinition } from "./package.js";
-import type { LazyLoader, PackageLoadResult } from "./loader.js";
-import { selectCachedRegistrations, type LazyLoaderCache } from "./cache.js";
+import { isExecutableCapture, type LazyLoader, type PackageLoadResult } from "./loader.js";
+import { isCachedToolSchema, schemaIsJsonRepresentable, schemasEquivalent, selectCachedRegistrations, type LazyLoaderCache } from "./cache.js";
+
+export function formatProxyNote(packageName: string, toolName: string): string {
+  return `This deferred proxy loads package "${packageName}" on first use and then invokes "${toolName}".`;
+}
 
 export function formatProxyGuidance(packageName: string, toolName: string): string {
   return `This deferred proxy loads package "${packageName}" without executing "${toolName}". After loading completes, call "${toolName}" again using its loaded schema.`;
 }
 
-export function formatProxyDescription(baseDescription: string, packageName: string, toolName: string): string {
+export function formatProxyDescription(baseDescription: string, packageName: string, toolName: string, invoke = true): string {
   const cleanBase = baseDescription.trim().replace(/\.+$/, "");
-  return `${cleanBase}. ${formatProxyGuidance(packageName, toolName)}`;
+  const note = invoke ? formatProxyNote(packageName, toolName) : formatProxyGuidance(packageName, toolName);
+  return `${cleanBase}. ${note}`;
 }
 
 async function loadForProxy(pi: any, loader: LazyLoader, packageName: string): Promise<PackageLoadResult> {
@@ -36,6 +41,57 @@ function cacheDrift(packageName: string, toolName: string) {
   };
 }
 
+function retryHandoff(packageName: string, toolName: string, loaded?: PackageLoadResult) {
+  const details: {
+    ok: true;
+    loaded: true;
+    executed: false;
+    package: string;
+    retryTool: string;
+    newTools?: string[];
+    alreadyLoaded?: boolean;
+  } = { ok: true, loaded: true, executed: false, package: packageName, retryTool: toolName };
+  if (loaded) {
+    details.newTools = loaded.newTools;
+    details.alreadyLoaded = loaded.alreadyLoaded;
+  } else {
+    details.alreadyLoaded = true;
+  }
+  return {
+    content: [{
+      type: "text",
+      text: loaded
+        ? `Loaded package "${packageName}". Tool "${toolName}" was not executed. Call "${toolName}" again using its loaded schema.`
+        : `Package "${packageName}" is loaded. Call "${toolName}" again using its loaded schema.`,
+    }],
+    details,
+  };
+}
+
+function invokeMetadataEquivalent(
+  cached: { hasPrepareArguments?: boolean; executionMode?: unknown; constrainedSampling?: unknown },
+  live: { prepareArguments?: unknown; executionMode?: unknown; constrainedSampling?: unknown },
+): boolean {
+  if ((typeof live.prepareArguments === "function") !== (cached.hasPrepareArguments === true)) return false;
+  if (cached.executionMode !== live.executionMode) return false;
+  const sampling = (value: unknown) => (value === undefined || value === false ? false : value);
+  return schemasEquivalent(sampling(cached.constrainedSampling), sampling(live.constrainedSampling));
+}
+
+function cachedInvokeIsSafe(
+  cached: { parameters?: unknown; hasPrepareArguments?: boolean; executionMode?: unknown; constrainedSampling?: unknown },
+  live?: { parameters?: unknown; prepareArguments?: unknown; executionMode?: unknown; constrainedSampling?: unknown },
+): boolean {
+  // true is intentionally first-call-unsafe (proxy cannot run prepareArguments).
+  // false and undefined both mean "no prepareArguments" and may invoke.
+  if (cached.hasPrepareArguments === true) return false;
+  if (!isCachedToolSchema(cached.parameters)) return false;
+  if (!live) return true;
+  return invokeMetadataEquivalent(cached, live)
+    && schemaIsJsonRepresentable(live.parameters)
+    && schemasEquivalent(cached.parameters, live.parameters);
+}
+
 function loadFailure(packageName: string, toolName: string, error?: string) {
   const errMsg = error ? `: ${error}` : "";
   return {
@@ -48,7 +104,7 @@ function loadFailure(packageName: string, toolName: string, error?: string) {
   };
 }
 
-/** Register real-name load-and-retry proxies for cached tools of deferred packages. */
+/** Register real-name load-then-invoke proxies for cached tools of deferred packages. */
 export function registerToolProxies(
   pi: any,
   loader: LazyLoader,
@@ -76,58 +132,45 @@ export function registerToolProxies(
 
       loader.reserveTool(entry.name, declaration.name);
       const baseDesc = declaration.description?.trim() || `Tools provided by ${entry.name}`;
-      const guidance = formatProxyGuidance(entry.name, declaration.name);
-      const description = formatProxyDescription(baseDesc, entry.name, declaration.name);
+      const schema = declaration.parameters;
+      const canInvoke = cachedInvokeIsSafe(declaration);
+      const description = formatProxyDescription(baseDesc, entry.name, declaration.name, canInvoke);
 
-      pi.registerTool({
+      const proxyTool: any = {
         name: declaration.name,
         label: declaration.name,
         description,
-        parameters: Type.Object({}, { additionalProperties: true }),
-        async execute(_toolCallId: string, _params: any, _signal: AbortSignal, onUpdate: any) {
+        parameters: canInvoke ? schema : Type.Object({}, { additionalProperties: true }),
+        async execute(toolCallId: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) {
           const state = loader.getPackageState(entry.name);
           if (state?.status === "failed") {
             return loadFailure(entry.name, declaration.name, state.error);
           }
-          if (state?.status === "loaded") {
-            if (state.missingTools.includes(declaration.name)) {
-              return cacheDrift(entry.name, declaration.name);
+          let loaded: PackageLoadResult | undefined;
+          if (state?.status !== "loaded") {
+            onUpdate?.({
+              content: [{ type: "text", text: `Loading deferred package ${entry.name}...` }],
+              details: {},
+            });
+            loaded = await loadForProxy(pi, loader, entry.name);
+            if (!loaded.success) {
+              return loadFailure(entry.name, declaration.name, loaded.error);
             }
-            return {
-              content: [{ type: "text", text: `Package "${entry.name}" is loaded. Call "${declaration.name}" again using its loaded schema.` }],
-              details: { ok: true, loaded: true, executed: false, package: entry.name, retryTool: declaration.name, alreadyLoaded: true },
-            };
           }
 
-          onUpdate?.({
-            content: [{ type: "text", text: `Loading deferred package ${entry.name}...` }],
-            details: {},
-          });
-          const loaded = await loadForProxy(pi, loader, entry.name);
-          if (!loaded.success) {
-            return loadFailure(entry.name, declaration.name, loaded.error);
-          }
-          if (loaded.missingTools?.includes(declaration.name)) {
-            return cacheDrift(entry.name, declaration.name);
+          const captured = loader.getCapturedTool(entry.name, declaration.name);
+          if (!isExecutableCapture("tool", captured)) return cacheDrift(entry.name, declaration.name);
+
+          if (!cachedInvokeIsSafe(declaration, captured)) {
+            return retryHandoff(entry.name, declaration.name, loaded);
           }
 
-          return {
-            content: [{
-              type: "text",
-              text: `Loaded package "${entry.name}". Tool "${declaration.name}" was not executed. Call "${declaration.name}" again using its loaded schema.`,
-            }],
-            details: {
-              ok: true,
-              loaded: true,
-              executed: false,
-              package: entry.name,
-              retryTool: declaration.name,
-              newTools: loaded.newTools,
-              alreadyLoaded: loaded.alreadyLoaded,
-            },
-          };
+          return await loader.invokeCapturedTool(entry.name, declaration.name, toolCallId, params, signal, onUpdate, ctx);
         },
-      });
+      };
+      if (declaration.executionMode !== undefined) proxyTool.executionMode = declaration.executionMode;
+      if (declaration.constrainedSampling !== undefined) proxyTool.constrainedSampling = declaration.constrainedSampling;
+      pi.registerTool(proxyTool);
 
       occupied.add(declaration.name);
     }

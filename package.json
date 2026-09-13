@@ -1,6 +1,6 @@
 {
   "name": "pi-lazy-loader",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "On-demand extension loader for Pi coding agent",
   "repository": "github:xulongwu4/pi-lazy-loader",
   "homepage": "https://github.com/xulongwu4/pi-lazy-loader#readme",
@@ -26,7 +26,7 @@
     "check": "bun checks/run-checks.ts",
     "check:command": "bun checks/phase4-command-checks.ts",
     "check:proxy": "bun checks/command-proxy-checks.ts",
-    "check:v050": "bun checks/v050-checks.ts"
+    "check:v050": "bun checks/v050-checks.ts && bun checks/v050-schema-checks.ts && bun checks/v050-late-checks.ts"
   },
   "dependencies": {
     "jiti": "^2.4.2"

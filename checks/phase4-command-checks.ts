@@ -2,21 +2,27 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { LazyLoader } from "../src/loader.js";
+import { CacheDriftError, LazyLoader } from "../src/loader.js";
+import { fakePi } from "./fake-pi.js";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
 }
 
-const root = join(tmpdir(), `pi-lazy-command-${Date.now()}`);
-const packageRoot = join(root, "npm", "node_modules", "pi-token-burden");
-mkdirSync(packageRoot, { recursive: true });
-writeFileSync(
-  join(packageRoot, "package.json"),
-  JSON.stringify({ name: "pi-token-burden", type: "module", pi: { extensions: ["./index.js"] } }),
-);
-writeFileSync(
-  join(packageRoot, "index.js"),
+function writeTempCommandPackage(suffix: string, indexJs: string) {
+  const root = join(tmpdir(), `pi-lazy-command-${suffix}-${Date.now()}`);
+  const packageRoot = join(root, "npm", "node_modules", "pi-token-burden");
+  mkdirSync(packageRoot, { recursive: true });
+  writeFileSync(
+    join(packageRoot, "package.json"),
+    JSON.stringify({ name: "pi-token-burden", type: "module", pi: { extensions: ["./index.js"] } }),
+  );
+  writeFileSync(join(packageRoot, "index.js"), indexJs);
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
+const { root, cleanup } = writeTempCommandPackage(
+  "top",
   `export default function (pi) {
     globalThis.__phase4CommandFactoryCount = (globalThis.__phase4CommandFactoryCount || 0) + 1;
     pi.registerCommand("token-burden", {
@@ -32,15 +38,8 @@ writeFileSync(
   }`,
 );
 
-const commands = new Map<string, any>();
-const pi: any = {
-  registerTool() {},
-  registerCommand(name: string, command: any) { commands.set(name, command); },
-  getAllTools() { return []; },
-  getActiveTools() { return []; },
-  setActiveTools() {},
-  on() {},
-};
+const pi: any = fakePi();
+const commands = pi.commands;
 
 try {
   const loader = new LazyLoader(pi, root, [{
@@ -101,5 +100,220 @@ try {
   delete (globalThis as any).__phase4CommandFactoryCount;
   delete (globalThis as any).__phase4CommandHandlerCount;
   delete (globalThis as any).__phase4CommandError;
-  rmSync(root, { recursive: true, force: true });
+  cleanup();
+}
+
+{
+  const { root: lateRoot, cleanup } = writeTempCommandPackage(
+    "late",
+    `export default function (pi) {
+      pi.on("tool_call", () => {
+        const taken = (pi.getCommands?.() ?? []).some((c) => c.name === "token-burden");
+        if (!taken) {
+          pi.registerCommand("token-burden", {
+            description: "late command",
+            handler() { return "late-result"; }
+          });
+        }
+      });
+    }`,
+  );
+  const pi: any = fakePi();
+  const commands = pi.commands;
+  try {
+    const loader = new LazyLoader(pi, lateRoot, [{ name: "pi-token-burden", source: "npm:pi-token-burden" }]);
+    loader.reserveCommand("pi-token-burden", "token-burden");
+    const stub = { description: "stub", handler() { return "stub"; } };
+    commands.set("token-burden", stub);
+    const loaded = await loader.loadPackage("pi-token-burden");
+    assert(loaded.success, loaded.error ?? "late command package must load");
+    assert(commands.get("token-burden") === stub, "reserved command must stay staged until post-load register");
+    assert(!loader.isCommandCaptured("pi-token-burden", "token-burden"), "late command must not be captured before registerCommand");
+    await pi.emit("tool_call");
+    assert(commands.get("token-burden") !== stub, "post-loaded reserved command must register with the host");
+    assert(loader.isCommandCaptured("pi-token-burden", "token-burden"), "skip-if-registered late register must see hidden proxy and capture");
+    const result = await loader.invokeCapturedCommand("pi-token-burden", "token-burden", "", {});
+    assert(result === "late-result", "post-loaded reserved command must be captured");
+    console.log("Phase 4.2 post-load reserved command capture/host registration: PASS");
+  } finally {
+    cleanup();
+  }
+}
+
+{
+  const { root: failRoot, cleanup } = writeTempCommandPackage(
+    "fail",
+    `export default function (pi) {
+      pi.on("tool_call", () => {
+        const taken = (pi.getCommands?.() ?? []).some((c) => c.name === "token-burden");
+        if (!taken) {
+          pi.registerCommand("token-burden", {
+            description: "should not land",
+            handler() { return "nope"; }
+          });
+        }
+      });
+      throw new Error("factory boom");
+    }`,
+  );
+  const pi: any = fakePi();
+  const commands = pi.commands;
+  try {
+    const loader = new LazyLoader(pi, failRoot, [{ name: "pi-token-burden", source: "npm:pi-token-burden" }]);
+    loader.reserveCommand("pi-token-burden", "token-burden");
+    const stub = { description: "stub", handler() { return "stub"; } };
+    commands.set("token-burden", stub);
+    const failed = await loader.loadPackage("pi-token-burden");
+    assert(!failed.success && failed.status === "failed", "factory failure must stick");
+    let lateErr: unknown;
+    try {
+      await pi.emit("tool_call");
+    } catch (error) {
+      lateErr = error;
+    }
+    assert(!lateErr, "surviving handler after failed load must not throw on an unrelated event");
+    assert(commands.get("token-burden") === stub, "post-failure register must not replace the stub");
+    assert(!loader.isCommandCaptured("pi-token-burden", "token-burden"), "post-failure register must not capture");
+    console.log("Phase 4.2 post-failure reserved command drop: PASS");
+  } finally {
+    cleanup();
+  }
+}
+
+{
+  const { root: metaRoot, cleanup } = writeTempCommandPackage(
+    "meta",
+    `export default function (pi) {
+      pi.registerCommand("token-burden", { description: "meta only" });
+    }`,
+  );
+  const pi: any = fakePi();
+  try {
+    const loader = new LazyLoader(pi, metaRoot, [{ name: "pi-token-burden", source: "npm:pi-token-burden" }]);
+    loader.reserveCommand("pi-token-burden", "token-burden");
+    const loaded = await loader.loadPackage("pi-token-burden");
+    assert(loaded.success, loaded.error ?? "metadata-only package must load");
+    assert(!loader.isCommandCaptured("pi-token-burden", "token-burden"), "metadata-only registration is not captured as ready");
+    assert(loader.getCommandStatus("pi-token-burden", "token-burden") === "missing", "metadata-only registration must not report [ready]");
+    let drift: unknown;
+    try {
+      await loader.invokeCapturedCommand("pi-token-burden", "token-burden", "", {});
+    } catch (error) {
+      drift = error;
+    }
+    assert(drift instanceof CacheDriftError, "metadata-only invocation must report cache drift");
+    console.log("Phase 4.2 metadata-only command is not [ready]: PASS");
+  } finally {
+    cleanup();
+  }
+}
+
+{
+  const { root: oopsRoot, cleanup } = writeTempCommandPackage(
+    "oops",
+    `export default function (pi) {
+      pi.registerCommand("token-burden", { description: "oops", handler: "oops" });
+    }`,
+  );
+  const pi: any = fakePi();
+  try {
+    const loader = new LazyLoader(pi, oopsRoot, [{ name: "pi-token-burden", source: "npm:pi-token-burden" }]);
+    loader.reserveCommand("pi-token-burden", "token-burden");
+    const loaded = await loader.loadPackage("pi-token-burden");
+    assert(loaded.success, loaded.error ?? "non-function handler package must load");
+    assert(!loader.isCommandCaptured("pi-token-burden", "token-burden"), "handler:'oops' must not count as captured");
+    assert(loader.getCommandStatus("pi-token-burden", "token-burden") === "missing", "handler:'oops' must not report [ready]");
+    assert(!(loaded.newTools ?? []).includes("token-burden"), "handler:'oops' must not appear as new/published");
+    let drift: unknown;
+    try {
+      await loader.invokeCapturedCommand("pi-token-burden", "token-burden", "", {});
+    } catch (error) {
+      drift = error;
+    }
+    assert(drift instanceof CacheDriftError, "handler:'oops' public invoke must throw CacheDriftError");
+    assert(!(drift instanceof TypeError), "handler:'oops' must not TypeError");
+    console.log("Phase 4.2 handler:'oops' is not [ready]: PASS");
+  } finally {
+    cleanup();
+  }
+}
+
+{
+  const { root: liveRoot, cleanup } = writeTempCommandPackage(
+    "oops-live",
+    `export default function (pi) {
+      pi.registerCommand("token-burden", { description: "oops", handler: "oops" });
+    }`,
+  );
+  const pi: any = fakePi();
+  try {
+    const loader = new LazyLoader(pi, liveRoot, [{ name: "pi-token-burden", source: "npm:pi-token-burden" }]);
+    loader.reserveCommand("pi-token-burden", "token-burden");
+    pi.registerCommand("token-burden", {
+      description: "lazy",
+      async handler(args: string, ctx: any) {
+        return await loader.invokeCapturedCommand("pi-token-burden", "token-burden", args, ctx);
+      },
+    });
+    const loaded = await loader.loadPackage("pi-token-burden");
+    assert(loaded.success, loaded.error ?? "handler:'oops' package must load");
+    assert(loader.getCommandStatus("pi-token-burden", "token-burden") === "missing", "handler:'oops' live host must stay not-ready");
+    assert(!(loaded.newTools ?? []).includes("token-burden"), "handler:'oops' must not appear as new/published");
+    const live = (pi.getCommands?.() ?? []).find((command: any) => command.name === "token-burden");
+    assert(typeof live?.handler === "function", "handler:'oops' must not replace the live host proxy");
+    let drift: unknown;
+    try {
+      await live.handler("", {});
+    } catch (error) {
+      drift = error;
+    }
+    assert(drift instanceof CacheDriftError, "live host handler:'oops' must report cache drift");
+    assert(!(drift instanceof TypeError), "live host handler:'oops' must not TypeError");
+    console.log("Phase 4.2 handler:'oops' live host stays proxy: PASS");
+  } finally {
+    cleanup();
+  }
+}
+
+{
+  const { root: dupRoot, cleanup } = writeTempCommandPackage(
+    "dup-post-load",
+    `export default function (pi) {
+      pi.registerCommand("token-burden", {
+        description: "first",
+        handler() { return "first-result"; }
+      });
+      pi.on("tool_call", () => {
+        pi.registerCommand("token-burden", {
+          description: "second",
+          handler() { return "second-result"; }
+        });
+      });
+    }`,
+  );
+  const pi: any = fakePi();
+  try {
+    const loader = new LazyLoader(pi, dupRoot, [{ name: "pi-token-burden", source: "npm:pi-token-burden" }]);
+    loader.reserveCommand("pi-token-burden", "token-burden");
+    const loaded = await loader.loadPackage("pi-token-burden");
+    assert(loaded.success, loaded.error ?? "post-load duplicate package must load");
+    assert(loader.isCommandCaptured("pi-token-burden", "token-burden"), "factory registration must be captured after load");
+    const first = await loader.invokeCapturedCommand("pi-token-burden", "token-burden", "", {});
+    assert(first === "first-result", "first captured handler must run before duplicate");
+    let dupErr: unknown;
+    try {
+      await pi.emit("tool_call");
+    } catch (error) {
+      dupErr = error;
+    }
+    const message = dupErr instanceof Error ? dupErr.message : String(dupErr ?? "");
+    assert(message.includes("Duplicate target registration"), "post-load duplicate must throw Duplicate target registration");
+    assert(message.includes("token-burden"), "duplicate error must include command name");
+    assert(message.includes("pi-token-burden"), "duplicate error must include package name");
+    const still = await loader.invokeCapturedCommand("pi-token-burden", "token-burden", "", {});
+    assert(still === "first-result", "first captured handler must remain (no last-write-wins)");
+    console.log("Phase 4.2 post-load duplicate reserved registerCommand: PASS");
+  } finally {
+    cleanup();
+  }
 }

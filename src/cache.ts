@@ -6,6 +6,169 @@ export const CACHE_FILENAME = "lazy-loader-cache.json";
 export interface CachedRegistration {
   name: string;
   description?: string;
+  /** JSON-schema parameters for a cached tool. Absent on old cache files and on commands. */
+  parameters?: unknown;
+  executionMode?: unknown;
+  constrainedSampling?: unknown;
+  hasPrepareArguments?: boolean;
+}
+
+/** True when `value` is a JSON-schema object the host can validate against. */
+export function isCachedToolSchema(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const schema = value as { type?: unknown; properties?: unknown };
+  if (schema.type !== "object") return false;
+  if (schema.properties === undefined) return true;
+  return typeof schema.properties === "object" && schema.properties !== null && !Array.isArray(schema.properties);
+}
+
+function forEachJsonField(node: object, visit: (key: string, value: unknown) => void): void {
+  for (const key of Reflect.ownKeys(node)) {
+    if (typeof key !== "string") continue;
+    const desc = Object.getOwnPropertyDescriptor(node, key);
+    if (!desc || desc.get || desc.set || !desc.enumerable) continue;
+    visit(key, desc.value);
+  }
+}
+
+/** DAG clone: reuse already-cloned nodes (linear in unique objects). Cycles throw. */
+export function cloneJsonValue(value: unknown): unknown {
+  const memo = new WeakMap<object, unknown>();
+  const stack = new WeakSet<object>();
+  const walk = (node: unknown): unknown => {
+    if (node === null || typeof node !== "object") return node;
+    const hit = memo.get(node);
+    if (hit !== undefined) return hit;
+    if (stack.has(node)) throw new TypeError("cyclic structure");
+    stack.add(node);
+    try {
+      if (Array.isArray(node)) {
+        const copy: unknown[] = [];
+        for (let i = 0; i < node.length; i++) copy.push(walk(node[i]));
+        memo.set(node, copy);
+        return copy;
+      }
+      const copy: Record<string, unknown> = {};
+      forEachJsonField(node, (key, field) => {
+        copy[key] = walk(field);
+      });
+      memo.set(node, copy);
+      return copy;
+    } finally {
+      stack.delete(node);
+    }
+  };
+  return walk(value);
+}
+
+export function schemasEquivalent(cached: unknown, live: unknown): boolean {
+  const seen = new WeakMap<object, WeakMap<object, boolean>>();
+  const walking = new WeakMap<object, WeakSet<object>>();
+  const eq = (a: unknown, b: unknown): boolean => {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+    const prev = seen.get(a)?.get(b);
+    if (prev !== undefined) return prev;
+    if (walking.get(a)?.has(b)) return false;
+    let walkInner = walking.get(a);
+    if (!walkInner) {
+      walkInner = new WeakSet();
+      walking.set(a, walkInner);
+    }
+    walkInner.add(b);
+    let result = false;
+    try {
+      if (Array.isArray(a) !== Array.isArray(b)) {
+        result = false;
+      } else if (Array.isArray(a) && Array.isArray(b)) {
+        result = a.length === b.length && a.every((item, i) => eq(item, b[i]));
+      } else {
+        const aFields: [string, unknown][] = [];
+        const bFields: [string, unknown][] = [];
+        forEachJsonField(a, (key, field) => aFields.push([key, field]));
+        forEachJsonField(b, (key, field) => bFields.push([key, field]));
+        result =
+          aFields.length === bFields.length &&
+          aFields.every(([key, field], i) => key === bFields[i][0] && eq(field, bFields[i][1]));
+      }
+    } finally {
+      walkInner.delete(b);
+    }
+    let inner = seen.get(a);
+    if (!inner) {
+      inner = new WeakMap();
+      seen.set(a, inner);
+    }
+    inner.set(b, result);
+    return result;
+  };
+  return eq(cached, live);
+}
+
+/**
+ * Ordinary TypeBox JSON Schema compositor tags. TypeBox documents these as
+ * `~kind` / `~optional` / `~readonly` (see typebox Settings.enumerableKind).
+ * JSON.stringify drops them; host validation ignores them. Semantic wrappers
+ * (Refine / Codec / Transform / Unsafe) use other `~` keys and stay rejected so
+ * cached parameters always round-trip. Fail closed: any unknown `~` key or
+ * symbol is non-representable. TypeBox does not export a stable allowlist.
+ */
+const TYPEBOX_JSON_META = new Set(["~kind", "~optional", "~readonly"]);
+
+/** False for cycles, functions, symbols, non-finite numbers, non-plain objects, and TypeBox refinements/codecs/custom constraints. */
+export function schemaIsJsonRepresentable(value: unknown): boolean {
+  const stack = new WeakSet<object>();
+  const memo = new WeakMap<object, boolean>();
+  const walk = (node: unknown): boolean => {
+    if (node === null || typeof node === "string" || typeof node === "boolean") return true;
+    if (typeof node === "number") return Number.isFinite(node);
+    if (typeof node !== "object") return false;
+    const cached = memo.get(node);
+    if (cached !== undefined) return cached;
+    if (stack.has(node)) return false;
+    stack.add(node);
+    let ok = false;
+    try {
+      if (Array.isArray(node)) {
+        ok = node.every(walk);
+      } else {
+        const proto = Object.getPrototypeOf(node);
+        if (proto !== Object.prototype && proto !== null) {
+          ok = false;
+        } else {
+          ok = true;
+          for (const key of Reflect.ownKeys(node)) {
+            if (typeof key === "symbol") {
+              ok = false;
+              break;
+            }
+            if (typeof key === "string" && key.startsWith("~") && !TYPEBOX_JSON_META.has(key)) {
+              ok = false;
+              break;
+            }
+            const desc = Object.getOwnPropertyDescriptor(node, key);
+            if (!desc || desc.get || desc.set) {
+              ok = false;
+              break;
+            }
+            if (!desc.enumerable && !(typeof key === "string" && TYPEBOX_JSON_META.has(key))) {
+              ok = false;
+              break;
+            }
+            if (!walk(desc.value)) {
+              ok = false;
+              break;
+            }
+          }
+        }
+      }
+    } finally {
+      stack.delete(node);
+    }
+    memo.set(node, ok);
+    return ok;
+  };
+  return walk(value);
 }
 
 export interface CachedPackage {
@@ -28,7 +191,13 @@ function normalizeRegistrations(value: unknown): CachedRegistration[] {
       typeof item === "object" && typeof item?.description === "string" && item.description.trim()
         ? item.description.trim()
         : undefined;
-    registrations.push({ name, description });
+    const raw = typeof item === "object" && item !== null ? (item as Record<string, unknown>) : undefined;
+    const rawParameters = raw?.parameters;
+    const parameters = isCachedToolSchema(rawParameters) ? rawParameters : undefined;
+    const executionMode = raw && "executionMode" in raw ? raw.executionMode : undefined;
+    const constrainedSampling = raw && "constrainedSampling" in raw ? raw.constrainedSampling : undefined;
+    const hasPrepareArguments = raw?.hasPrepareArguments === true ? true : undefined;
+    registrations.push({ name, description, parameters, executionMode, constrainedSampling, hasPrepareArguments });
   }
   return registrations;
 }

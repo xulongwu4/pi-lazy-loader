@@ -4,3 +4,4 @@ node_modules/
 *.tmp
 .rlm/
 .DS_Store
+/graphify-out/

@@ -8,6 +8,7 @@ import { LazyLoader } from "../src/loader.js";
 import { CONFIG_FILENAME, readLazyLoaderConfig } from "../src/config.js";
 import {
   registerToolProxies,
+  formatProxyNote,
   formatProxyGuidance,
   formatProxyDescription,
 } from "../src/tool-proxy.js";
@@ -19,9 +20,19 @@ import {
   CACHE_FILENAME,
   type LazyLoaderCache,
 } from "../src/cache.js";
+import { fakePi } from "./fake-pi.js";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Assertion failed: ${message}`);
+}
+
+const secretParams = { query: "no-echo-query-token-9f3c", apiKey: "no-echo-apikey-token-7b21" };
+
+function assertNoCallerEcho(result: unknown, params: Record<string, unknown>, label: string) {
+  const blob = JSON.stringify(result) ?? "";
+  for (const [key, value] of Object.entries(params)) {
+    assert(!blob.includes(String(value)), `${label} must not echo caller ${key} argument`);
+  }
 }
 
 function fixture(root: string, packageName: string, body: string) {
@@ -39,42 +50,6 @@ function fixture(root: string, packageName: string, body: string) {
   writeFileSync(join(dir, "index.js"), body, "utf-8");
 }
 
-function fakePi(active: string[] = []) {
-  const tools = new Map<string, any>();
-  const commands = new Map<string, any>();
-  const restored: string[][] = [];
-  const handlers = new Map<string, Function[]>();
-  return {
-    tools,
-    commands,
-    restored,
-    registerTool(tool: any) {
-      tools.set(tool.name, tool);
-    },
-    registerCommand(name: string, command: any) {
-      commands.set(name, command);
-    },
-    getCommands() {
-      return Array.from(commands, ([name, command]) => ({ name, ...command }));
-    },
-    on(event: string, handler: Function) {
-      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
-    },
-    async emit(event: string, ...args: any[]) {
-      for (const handler of handlers.get(event) ?? []) await handler(...args);
-    },
-    getAllTools() {
-      return Array.from(tools.values());
-    },
-    getActiveTools() {
-      return [...active];
-    },
-    setActiveTools(names: string[]) {
-      restored.push([...names]);
-    },
-  };
-}
-
 function entry(name: string) {
   return {
     name,
@@ -83,10 +58,17 @@ function entry(name: string) {
   };
 }
 
+const objectSchema = { type: "object", properties: {}, additionalProperties: true };
 const webCache: LazyLoaderCache = {
   version: 1,
   packages: {
-    "pi-web-access": { tools: [{ name: "web_search" }, { name: "fetch_content" }], commands: [] },
+    "pi-web-access": {
+      tools: [
+        { name: "web_search", parameters: objectSchema },
+        { name: "fetch_content", parameters: objectSchema },
+      ],
+      commands: [],
+    },
   },
 };
 
@@ -104,8 +86,8 @@ console.log("--- Check 1: Proxy Registration & Description ---");
     packages: {
       "pi-web-access": {
         tools: [
-          { name: "web_search", description: "Search the web using multi-provider queries." },
-          { name: "fetch_content" },
+          { name: "web_search", description: "Search the web using multi-provider queries.", parameters: objectSchema },
+          { name: "fetch_content", parameters: objectSchema },
         ],
         commands: [],
       },
@@ -119,24 +101,24 @@ console.log("--- Check 1: Proxy Registration & Description ---");
   assert(searchProxy, "web_search proxy must be registered");
   assert(fetchProxy, "fetch_content proxy must be registered");
 
-  const expectedSearchGuidance = formatProxyGuidance("pi-web-access", "web_search");
+  const expectedSearchNote = formatProxyNote("pi-web-access", "web_search");
   assert(
     searchProxy.description.includes("Search the web using multi-provider queries"),
     "web_search description must prefer cached description"
   );
   assert(
-    searchProxy.description.includes(expectedSearchGuidance),
-    "web_search description must contain next-step guidance"
+    searchProxy.description.includes(expectedSearchNote),
+    "web_search description must contain the deferred-proxy note"
   );
 
-  const expectedFetchGuidance = formatProxyGuidance("pi-web-access", "fetch_content");
+  const expectedFetchNote = formatProxyNote("pi-web-access", "fetch_content");
   assert(
     fetchProxy.description.includes("Tools provided by pi-web-access"),
     "cached tool without a description must use the package-name fallback"
   );
   assert(
-    fetchProxy.description.includes(expectedFetchGuidance),
-    "fetch_content description must contain next-step guidance"
+    fetchProxy.description.includes(expectedFetchNote),
+    "fetch_content description must contain the deferred-proxy note"
   );
 
   assert(selectCachedRegistrations(cacheWithDesc.packages["pi-web-access"].tools, []).length === 0, "empty allowlist must disable the proxy type");
@@ -145,9 +127,9 @@ console.log("--- Check 1: Proxy Registration & Description ---");
 }
 
 // ---------------------------------------------------------------------------
-// Check 2: Proxy Execution Loads but Does Not Execute and Requests Retry
+// Check 2: Proxy Execution Loads Then Invokes the Real Tool
 // ---------------------------------------------------------------------------
-console.log("--- Check 2: Proxy Loads Package, Does Not Execute, and Requests Retry ---");
+console.log("--- Check 2: Proxy Loads Package Then Invokes the Real Tool ---");
 {
   const root = join(tmpdir(), `pi-lazy-v050-chk2-${Date.now()}`);
   mkdirSync(root, { recursive: true });
@@ -161,9 +143,11 @@ console.log("--- Check 2: Proxy Loads Package, Does Not Execute, and Requests Re
         pi.registerTool({
           name: "web_search",
           description: "Real web search",
-          execute() {
+          parameters: { type: "object", properties: {}, additionalProperties: true },
+          execute(id, params, signal, onUpdate, ctx) {
             globalThis.__v050ExecCount = (globalThis.__v050ExecCount || 0) + 1;
-            return { content: [{ type: "text", text: "executed" }] };
+            globalThis.__v050ExecArgs = { id, params, signal, onUpdate, ctx };
+            return { content: [{ type: "text", text: "executed" }], details: { from: "real" } };
           }
         });
       }
@@ -180,31 +164,31 @@ console.log("--- Check 2: Proxy Loads Package, Does Not Execute, and Requests Re
     const proxy = pi.tools.get("web_search");
     assert(proxy, "web_search proxy must be registered");
 
-    const callerArgs = { query: "super_secret_query_DO_NOT_LEAK", apiKey: "secret_12345" };
-    const result = await proxy.execute("call-1", callerArgs);
+    const callerArgs = { query: "quantum computing" };
+    const signal = AbortSignal.abort();
+    const onUpdate = () => {};
+    const ctx = { cwd: "/fixture" };
+    const result = await proxy.execute("call-1", callerArgs, signal, onUpdate, ctx);
 
     assert((globalThis as any).__v050FactoryCount === 1, "proxy execution must load the package once");
-    assert((globalThis as any).__v050ExecCount === 0, "proxy execution must not execute the real tool");
+    assert((globalThis as any).__v050ExecCount === 1, "proxy execution must invoke the real tool");
     assert(pi.tools.get("web_search") !== proxy, "successful load must replace the proxy with the real tool");
-    assert(result.content[0].text.includes("was not executed"), "result must make non-execution explicit");
-    assert(result.content[0].text.includes("Call \"web_search\" again"), "result must request a retry");
-    assert(result.details.loaded === true, "details.loaded must be true");
-    assert(result.details.executed === false, "details.executed must be false");
-    assert(result.details.package === "pi-web-access", "details.package must match canonical package");
-    assert(result.details.loadTool === undefined, "loaded proxy result must request a direct tool retry");
-    assert(result.details.retryTool === "web_search", "details.retryTool must match declared tool name");
+    assert(result.content[0].text === "executed", "proxy must return the real tool result unchanged");
+    assert(result.details.from === "real", "proxy must not wrap the real tool details");
+    const forwarded = (globalThis as any).__v050ExecArgs;
+    assert(forwarded.id === "call-1", "tool call id must be forwarded");
+    assert(forwarded.params === callerArgs, "execute must receive original params");
+    assert(forwarded.signal === signal, "abort signal identity must be preserved");
+    assert(forwarded.onUpdate === onUpdate, "onUpdate identity must be preserved");
+    assert(forwarded.ctx === ctx, "tool context identity must be preserved");
     assert(JSON.stringify(pi.restored.at(-1)) === JSON.stringify(active), "proxy load must restore Fabric active tools");
 
-    const staleProxyResult = await proxy.execute("call-2", {});
-    assert(staleProxyResult.details.alreadyLoaded === true, "a stale proxy reference must report the package already loaded");
-    assert(staleProxyResult.details.retryTool === "web_search", "a stale proxy reference must still request the real-tool retry");
+    const staleProxyResult = await proxy.execute("call-2", { q: "again" }, signal, onUpdate, ctx);
+    assert(staleProxyResult.content[0].text === "executed", "a stale proxy reference must still invoke the real tool");
     assert((globalThis as any).__v050FactoryCount === 1, "stale proxy reference must not reload the package");
+    assert((globalThis as any).__v050ExecCount === 2, "stale proxy reference must invoke the real tool again");
 
-    const serialized = JSON.stringify(result);
-    assert(!serialized.includes("super_secret_query_DO_NOT_LEAK"), "must not echo caller query argument");
-    assert(!serialized.includes("secret_12345"), "must not echo caller apiKey argument");
-
-    console.log("  ✓ Proxy loads once, never executes or echoes arguments, restores Fabric, and requests a real-tool retry");
+    console.log("  ✓ Proxy loads once, invokes the real tool with original arguments, and restores Fabric");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -227,7 +211,7 @@ console.log("--- Check 3: Package Load Publishes Staged Real Tools Replacing Pro
         pi.registerTool({
           name: "web_search",
           description: "Real web search",
-          parameters: { type: "object" },
+          parameters: { type: "object", properties: {}, additionalProperties: true },
           async execute(id, params) {
             return {
               content: [{ type: "text", text: "search-result for " + params.q }],
@@ -238,7 +222,7 @@ console.log("--- Check 3: Package Load Publishes Staged Real Tools Replacing Pro
         pi.registerTool({
           name: "fetch_content",
           description: "Real fetch content",
-          parameters: { type: "object" },
+          parameters: { type: "object", properties: {}, additionalProperties: true },
           async execute(id, params) {
             return {
               content: [{ type: "text", text: "fetch-result for " + params.url }],
@@ -259,15 +243,15 @@ console.log("--- Check 3: Package Load Publishes Staged Real Tools Replacing Pro
     const fetchProxy = pi.tools.get("fetch_content");
     assert(searchProxy && fetchProxy, "proxies must exist before load");
 
-    // Concurrent proxy calls share one package load and each request a retry.
+    // Concurrent proxy calls share one package load and each invoke its real tool.
     const [res1, res2] = await Promise.all([
-      searchProxy.execute("search-proxy", { q: "ignored" }),
-      fetchProxy.execute("fetch-proxy", { url: "ignored" }),
+      searchProxy.execute("search-proxy", { q: "quantum" }),
+      fetchProxy.execute("fetch-proxy", { url: "https://example.test" }),
     ]);
 
     assert((globalThis as any).__v050Chk3Factory === 1, "concurrent proxy calls must share one load promise");
-    assert(res1.details.retryTool === "web_search", "search proxy must request a web_search retry");
-    assert(res2.details.retryTool === "fetch_content", "fetch proxy must request a fetch_content retry");
+    assert(res1.content[0].text === "search-result for quantum", "search proxy must invoke real web_search");
+    assert(res2.content[0].text === "fetch-result for https://example.test", "fetch proxy must invoke real fetch_content");
 
     const realSearch = pi.tools.get("web_search");
     const realFetch = pi.tools.get("fetch_content");
@@ -314,8 +298,9 @@ console.log("--- Check 4: Surviving Proxy in Loaded State Returns Terminal Cache
     const fetchProxy = pi.tools.get("fetch_content");
     assert(fetchProxy, "fetch_content proxy must be registered at startup");
 
-    const driftResult = await fetchProxy.execute("call-drift", {});
+    const driftResult = await fetchProxy.execute("call-drift", secretParams);
     assert(driftResult.isError === true, "missing tool must return an error after proxy-triggered load");
+    assertNoCallerEcho(driftResult, secretParams, "cacheDrift");
     const loadResult = await loader.loadPackage("pi-web-access");
     assert(loadResult.success, "package must remain successfully loaded");
     assert(loadResult.missingTools?.includes("fetch_content"), "load result must track missing fetch_content");
@@ -325,8 +310,9 @@ console.log("--- Check 4: Surviving Proxy in Loaded State Returns Terminal Cache
     // The fetch_content proxy survived because the package never registered it
     assert(pi.tools.get("fetch_content") === fetchProxy, "fetch_content proxy survives when package didn't provide it");
 
-    const repeatedDrift = await fetchProxy.execute("call-drift-again", {});
+    const repeatedDrift = await fetchProxy.execute("call-drift-again", secretParams);
     assert(repeatedDrift.isError === true, "surviving proxy must keep returning an error");
+    assertNoCallerEcho(repeatedDrift, secretParams, "repeated cacheDrift");
     assert(driftResult.details.cacheDrift === true, "details.cacheDrift must be true");
     assert(driftResult.details.executed === false, "details.executed must be false");
     assert(driftResult.details.retryTool === undefined, "terminal drift must not include retryTool");
@@ -372,9 +358,10 @@ console.log("--- Check 5: Failed State Returns Terminal Reload Guidance ---");
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
 
     const proxy = pi.tools.get("web_search");
-    const failResult = await proxy.execute("load-fail", {});
+    const failResult = await proxy.execute("load-fail", secretParams);
     assert(failResult.isError === true, "proxy must report package load failure");
     assert(failResult.details.failed === true, "proxy failure details must be terminal");
+    assertNoCallerEcho(failResult, secretParams, "loadFailure");
     const repeatedLoad = await loader.loadPackage("pi-web-access");
     assert(repeatedLoad.success === false, "sticky failure must reject repeated loads");
     assert((globalThis as any).__v050Chk5Factory === 1, "sticky failure must not re-enter the package factory");
@@ -383,9 +370,10 @@ console.log("--- Check 5: Failed State Returns Terminal Reload Guidance ---");
     assert(pi.tools.get("web_search") === proxy, "failed load must not publish staged tool over proxy");
 
     // A stale proxy reference remains terminal without reloading.
-    const repeatedFailure = await proxy.execute("call-fail", {});
+    const repeatedFailure = await proxy.execute("call-fail", secretParams);
     assert(repeatedFailure.isError === true, "must return isError: true");
     assert(repeatedFailure.details.failed === true, "details.failed must be true");
+    assertNoCallerEcho(repeatedFailure, secretParams, "repeated loadFailure");
     assert(repeatedFailure.details.retryTool === undefined, "terminal failure must not include retryTool");
     assert(repeatedFailure.details.loadTool === undefined, "terminal failure must not include loadTool");
     assert(
@@ -450,8 +438,8 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
       "pi-web-access",
       `
       export default function (pi) {
-        pi.registerTool({ name: "web_search", description: "Fresh web search description", execute() {} });
-        pi.registerTool({ name: "bonus_tool", description: "Bonus", execute() {} });
+        pi.registerTool({ name: "web_search", description: "Fresh web search description", parameters: { type: "object", properties: { q: { type: "string" } } }, execute() {} });
+        pi.registerTool({ name: "bonus_tool", description: "Bonus", parameters: { type: "object" }, execute() {} });
         pi.registerCommand("web-status", { description: "Show web status", handler() {} });
       }
     `
@@ -467,6 +455,7 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
     const cachedPackage = cache.packages["pi-web-access"];
     assert(cachedPackage, "pi-web-access must be cached");
     assert(cachedPackage.tools.find((item) => item.name === "web_search")?.description === "Fresh web search description", "tool description cached");
+    assert(JSON.stringify(cachedPackage.tools.find((item) => item.name === "web_search")?.parameters) === JSON.stringify({ type: "object", properties: { q: { type: "string" } } }), "tool parameter schema cached");
     assert(cachedPackage.tools.find((item) => item.name === "bonus_tool")?.description === "Bonus", "every exposed tool cached");
     assert(cachedPackage.commands.find((item) => item.name === "web-status")?.description === "Show web status", "every exposed command cached");
 
