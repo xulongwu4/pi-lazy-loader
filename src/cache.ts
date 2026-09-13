@@ -107,15 +107,17 @@ export function schemasEquivalent(cached: unknown, live: unknown): boolean {
 
 /**
  * Ordinary TypeBox JSON Schema compositor tags. TypeBox documents these as
- * `~kind` / `~optional` / `~readonly` (see typebox Settings.enumerableKind).
+ * `~kind` / `~optional` / `~readonly` / `~unsafe` (see typebox Settings.enumerableKind).
  * JSON.stringify drops them; host validation ignores them. Semantic wrappers
- * (Refine / Codec / Transform / Unsafe) use other `~` keys and stay rejected so
- * cached parameters always round-trip. Fail closed: any unknown `~` key or
- * symbol is non-representable. TypeBox does not export a stable allowlist.
+ * (Refine / Codec / Transform) use other `~` keys and stay rejected so cached
+ * parameters always round-trip. `Type.Unsafe` emits only the inert `~unsafe`
+ * marker (null sentinel), which round-trips like the other meta keys. Fail closed: any
+ * unknown `~` key or symbol is non-representable. TypeBox does not export a
+ * stable allowlist.
  */
-const TYPEBOX_JSON_META = new Set(["~kind", "~optional", "~readonly"]);
+const TYPEBOX_JSON_META = new Set(["~kind", "~optional", "~readonly", "~unsafe"]);
 
-/** False for cycles, functions, symbols, non-finite numbers, non-plain objects, and TypeBox refinements/codecs/custom constraints. */
+/** False for cycles, functions, symbols, non-finite numbers, non-plain objects, and TypeBox refinements/codecs. */
 export function schemaIsJsonRepresentable(value: unknown): boolean {
   const stack = new WeakSet<object>();
   const memo = new WeakMap<object, boolean>();

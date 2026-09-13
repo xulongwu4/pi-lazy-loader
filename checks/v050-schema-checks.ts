@@ -762,7 +762,7 @@ console.log("--- Check 15: JSON Schema Representability ---");
     !schemaIsJsonRepresentable(Type.Codec(Type.String()).Decode((value) => value).Encode((value) => value)),
     "codec schemas must not be representable",
   );
-  assert(!schemaIsJsonRepresentable(Type.Unsafe({ type: "object", properties: {} })), "custom/unsafe schemas must not be representable");
+  assert(schemaIsJsonRepresentable(Type.Unsafe({ type: "object", properties: {} })), "unsafe schemas carry only the inert ~unsafe marker and must round-trip");
   const Transform = (Type as { Transform?: (...args: any[]) => unknown }).Transform;
   if (typeof Transform === "function") {
     assert(!schemaIsJsonRepresentable(Transform(Type.String())), "transform schemas must not be representable");
@@ -776,6 +776,7 @@ console.log("--- Check 15: JSON Schema Representability ---");
   mkdirSync(root, { recursive: true });
   try {
     (globalThis as any).__v050Chk15Object = Type.Object({ q: Type.String() });
+    (globalThis as any).__v050Chk15Unsafe = Type.Unsafe({ type: "object", properties: { u: { type: "string" } } });
     (globalThis as any).__v050Chk15Refine = Type.Refine(Type.Object({ q: Type.String() }), () => true);
     fixture(
       root,
@@ -783,6 +784,7 @@ console.log("--- Check 15: JSON Schema Representability ---");
       `
       export default function (pi) {
         pi.registerTool({ name: "plain_tool", parameters: globalThis.__v050Chk15Object, execute() { return { content: [{ type: "text", text: "ok" }] }; } });
+        pi.registerTool({ name: "unsafe_tool", parameters: globalThis.__v050Chk15Unsafe, execute() { return { content: [{ type: "text", text: "ok" }] }; } });
         pi.registerTool({ name: "refined_tool", parameters: globalThis.__v050Chk15Refine, execute() { return { content: [{ type: "text", text: "ok" }] }; } });
       }
     `,
@@ -793,13 +795,17 @@ console.log("--- Check 15: JSON Schema Representability ---");
     assert(loaded.success, loaded.error ?? "schema-pkg must load");
     const tools = readCache(root).packages["schema-pkg"]?.tools ?? [];
     const plainCached = tools.find((item) => item.name === "plain_tool");
+    const unsafeCached = tools.find((item) => item.name === "unsafe_tool");
     const refinedCached = tools.find((item) => item.name === "refined_tool");
     assert(isCachedToolSchema(plainCached?.parameters), "ordinary Type.Object must persist its JSON projection");
     assert((plainCached?.parameters as { properties?: { q?: { type?: string } } }).properties?.q?.type === "string", "cached Type.Object must keep JSON string properties");
+    assert(isCachedToolSchema(unsafeCached?.parameters), "Type.Unsafe must persist its JSON projection");
+    assert((unsafeCached?.parameters as { properties?: { u?: { type?: string } } }).properties?.u?.type === "string", "cached Type.Unsafe must keep JSON string properties");
     assert(refinedCached?.name === "refined_tool" && refinedCached.parameters === undefined, "refined TypeBox schemas must not persist parameters");
-    console.log("  ✓ Type.Object/DAG cache; refine/codec/unsafe/cycle do not");
+    console.log("  ✓ Type.Object/DAG/unsafe cache; refine/codec/cycle do not");
   } finally {
     delete (globalThis as any).__v050Chk15Object;
+    delete (globalThis as any).__v050Chk15Unsafe;
     delete (globalThis as any).__v050Chk15Refine;
     rmSync(root, { recursive: true, force: true });
   }

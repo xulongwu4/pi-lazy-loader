@@ -1,10 +1,12 @@
 # pi-lazy-loader Development Status
 
 **Updated:** 2026-09-13
-**Released version:** `v0.9.0`
-**Release reference:** `v0.9.0`
+**Released version:** `v0.9.1`
+**Release reference:** `v0.9.1`
 
 ## Executive Status
+
+`pi-lazy-loader` v0.9.1 is implemented, verified, and tagged. It extends `schemaIsJsonRepresentable` to allow TypeBox `Type.Unsafe(...)` schemas (`~unsafe` meta sentinel). Because `Type.Unsafe` attaches only the inert `['~unsafe']: null` marker and carries no custom runtime functions, codecs, transforms, or closures, valid JSON schemas constructed via `Type.Unsafe` (such as MCP tool declarations or external schema adapters) now persist their parameters in the cache and execute directly on the first deferred call without taking an unnecessary retry handoff.
 
 `pi-lazy-loader` v0.9.0 is implemented, verified, and tagged. Cached tool proxies are now load-then-invoke: when the cached contract is safe (JSON-representable object schema, no `prepareArguments`, and live schema/`executionMode`/`constrainedSampling` deep-equal the cache after load), the proxy loads the package and executes the captured tool on the first deferred call, eliminating the previous mandatory retry round-trip. The cache now stores full tool parameter schemas plus execution metadata, guarded by `isCachedToolSchema`, `schemaIsJsonRepresentable` (fails closed on cycles, functions, symbols, non-finite numbers, class instances, and unknown TypeBox `~` keys), `cloneJsonValue`, and `schemasEquivalent`. Unsafe or drifted contracts return `executed: false` `retryHandoff`; missing tools and failed loads stay terminal (`cacheDrift` / `loadFailure`). Late reserved tool/command registrations gained the same commit/stage path as commands (`commitReservedTool`), a typed `CacheDriftError`, debounced per-package cache refreshes, and `getAllTools`/`getActiveTools` interception so uncommitted reserved names stay hidden from skip-if-registered factories.
 

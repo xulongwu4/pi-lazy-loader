@@ -163,7 +163,7 @@ export class LazyLoader {
             if (!isCachedToolSchema(raw) || !schemaIsJsonRepresentable(raw)) {
               console.error(`[pi-lazy-loader] Skipping non-JSON parameter schema for "${name}" in "${packageName}"`);
             } else {
-              // schemaIsJsonRepresentable already allowed only TYPEBOX_JSON_META (~kind/~optional/~readonly).
+              // schemaIsJsonRepresentable already allowed only TYPEBOX_JSON_META (~kind/~optional/~readonly/~unsafe).
               parameters = cloneJsonValue(raw);
             }
           }
