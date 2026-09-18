@@ -885,6 +885,66 @@ console.log("--- Check 16: Live Option Mismatch Takes Retry Handoff ---");
   }
 }
 
+// ---------------------------------------------------------------------------
+// Check 17: promptSnippet / promptGuidelines round-trip through the cache onto proxies
+// ---------------------------------------------------------------------------
+console.log("--- Check 17: promptSnippet/promptGuidelines Survive Deferral ---");
+{
+  const root = join(tmpdir(), `pi-lazy-v050-chk17-${Date.now()}`);
+  mkdirSync(root, { recursive: true });
+  try {
+    fixture(
+      root,
+      "prompt-pkg",
+      `
+      export default function (pi) {
+        pi.registerTool({
+          name: "todo",
+          description: "Manage tasks",
+          promptSnippet: "Manage a task list",
+          promptGuidelines: ["Use todo for 3+ steps.", "  ", 42, "Mark in_progress first."],
+          parameters: { type: "object", properties: {}, additionalProperties: true },
+          execute() { return { content: [{ type: "text", text: "ok" }] }; },
+        });
+        pi.registerTool({
+          name: "bare",
+          parameters: { type: "object", properties: {}, additionalProperties: true },
+          execute() { return { content: [{ type: "text", text: "ok" }] }; },
+        });
+      }
+    `,
+    );
+    const warmPi = fakePi();
+    const warmLoader = new LazyLoader(warmPi as any, root, [entry("prompt-pkg")]);
+    const loaded = await warmLoader.loadPackage("prompt-pkg");
+    assert(loaded.success, loaded.error ?? "prompt-pkg must load");
+    const cached = readCache(root).packages["prompt-pkg"]?.tools ?? [];
+    const todoCached = cached.find((item) => item.name === "todo");
+    const bareCached = cached.find((item) => item.name === "bare");
+    assert(todoCached?.promptSnippet === "Manage a task list", "promptSnippet must persist in the cache");
+    assert(
+      JSON.stringify(todoCached?.promptGuidelines) === JSON.stringify(["Use todo for 3+ steps.", "Mark in_progress first."]),
+      "promptGuidelines must persist with blank/non-string entries dropped",
+    );
+    assert(bareCached?.promptSnippet === undefined && bareCached?.promptGuidelines === undefined, "tools without prompt fields must not gain them");
+
+    const coldPi = fakePi();
+    const coldLoader = new LazyLoader(coldPi as any, root, [entry("prompt-pkg")]);
+    registerToolProxies(coldPi, coldLoader, [entry("prompt-pkg")], readCache(root));
+    const todoProxy = coldPi.tools.get("todo");
+    const bareProxy = coldPi.tools.get("bare");
+    assert(todoProxy?.promptSnippet === "Manage a task list", "deferred proxy must carry promptSnippet before first use");
+    assert(
+      JSON.stringify(todoProxy?.promptGuidelines) === JSON.stringify(["Use todo for 3+ steps.", "Mark in_progress first."]),
+      "deferred proxy must carry promptGuidelines before first use",
+    );
+    assert(!("promptSnippet" in bareProxy) && !("promptGuidelines" in bareProxy), "proxy must not add undefined prompt keys");
+    console.log("  ✓ promptSnippet/promptGuidelines persist in cache and land on deferred proxies");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 console.log("\n==============================================");
 console.log("ALL v0.8.0 CACHE/SCHEMA CHECKS PASSED");
 console.log("==============================================");

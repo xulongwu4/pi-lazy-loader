@@ -170,6 +170,8 @@ export function registerToolProxies(
       };
       if (declaration.executionMode !== undefined) proxyTool.executionMode = declaration.executionMode;
       if (declaration.constrainedSampling !== undefined) proxyTool.constrainedSampling = declaration.constrainedSampling;
+      if (declaration.promptSnippet !== undefined) proxyTool.promptSnippet = declaration.promptSnippet;
+      if (declaration.promptGuidelines !== undefined) proxyTool.promptGuidelines = [...declaration.promptGuidelines];
       pi.registerTool(proxyTool);
 
       occupied.add(declaration.name);

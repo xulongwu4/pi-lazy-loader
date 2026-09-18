@@ -174,6 +174,8 @@ export class LazyLoader {
             executionMode: value?.executionMode,
             constrainedSampling: value?.constrainedSampling,
             hasPrepareArguments: typeof value?.prepareArguments === "function" ? true : undefined,
+            promptSnippet: value?.promptSnippet,
+            promptGuidelines: value?.promptGuidelines,
           };
         });
       updateCachedPackage(

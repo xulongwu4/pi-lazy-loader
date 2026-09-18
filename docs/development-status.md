@@ -1,10 +1,12 @@
 # pi-lazy-loader Development Status
 
-**Updated:** 2026-09-13
-**Released version:** `v0.9.1`
-**Release reference:** `v0.9.1`
+**Updated:** 2026-09-18
+**Released version:** `v0.9.2`
+**Release reference:** `v0.9.2`
 
 ## Executive Status
+
+`pi-lazy-loader` v0.9.2 is implemented, verified, and tagged. Deferred tool proxies now carry the real tool's `promptSnippet` and `promptGuidelines`. The cache persists both fields (trimmed snippet; blank or non-string guideline entries dropped), `refreshCache` captures them on every load, and `registerToolProxies` copies them onto the proxy definition, so Pi's system prompt lists the same one-line snippet and guidelines for a deferred tool as it would for the eagerly loaded one. Prompt fields are rendering metadata only and do not participate in the invoke-safety drift check. Note: under pi-fabric full-code mode, non-core extension tools are still listed by name only; this fix restores parity on Pi's native prompt path and for `capture.keepVisible` tools.
 
 `pi-lazy-loader` v0.9.1 is implemented, verified, and tagged. It extends `schemaIsJsonRepresentable` to allow TypeBox `Type.Unsafe(...)` schemas (`~unsafe` meta sentinel). Because `Type.Unsafe` attaches only the inert `['~unsafe']: null` marker and carries no custom runtime functions, codecs, transforms, or closures, valid JSON schemas constructed via `Type.Unsafe` (such as MCP tool declarations or external schema adapters) now persist their parameters in the cache and execute directly on the first deferred call without taking an unnecessary retry handoff.
 
@@ -33,7 +35,7 @@ The cache is `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`:
   "version": 1,
   "packages": {
     "example-package": {
-      "tools": [{ "name": "example_tool", "description": "Example tool" }],
+      "tools": [{ "name": "example_tool", "description": "Example tool", "parameters": { "type": "object", "properties": {} }, "promptSnippet": "One-line summary", "promptGuidelines": ["When to use example_tool"] }],
       "commands": [{ "name": "example-command", "description": "Example command" }]
     }
   }
@@ -49,6 +51,7 @@ The cache is `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`:
 ### Proxy Behavior
 
 - Cached command names receive lightweight slash-command proxies. Their first invocation loads the package and invokes the captured real handler immediately.
+- Cached tool proxies carry the cached `promptSnippet`/`promptGuidelines`, so the system prompt matches the real tool before first use.
 - Cached tool names receive load-then-invoke proxies when the cached contract is safe (JSON schema, no `prepareArguments`, live schema/options match). Otherwise the first call loads/registers and returns `executed: false` `retryHandoff`; the model must call again against the live host schema. Missing tools and failed loads stay terminal (`cacheDrift` / `loadFailure`).
 - Package loads remain idempotent and concurrent callers share one in-flight promise.
 - Reserved registrations are staged so failed multi-entry loads do not displace startup proxies.
@@ -130,6 +133,9 @@ src/tool-proxy.ts
 | `v0.8.0` | Remove LLM-facing `lazy_load`; cached real-name tool proxies load deferred packages; Fabric `keepVisible` is only `fabric_exec` |
 | `v0.8.1` | Isolate the Pi late-load ABI in `src/pi-host.ts` (`getAgentDir`, `resolvePackageRoot`, `jiti` `virtualModules`, lifecycle replay, `:N` occupancy) |
 | `v0.8.2` | Hide uncommitted reserved command proxies from `getCommands()` during load so skip-if-registered factories still capture; protected and already-observed names stay visible |
+| `v0.9.0` | Load-then-invoke cached tool proxies; full parameter schemas and execution metadata in the cache |
+| `v0.9.1` | Allow TypeBox `Type.Unsafe` schemas to round-trip and cache |
+| `v0.9.2` | Deferred tool proxies carry `promptSnippet`/`promptGuidelines` |
 
 ## Known Limitations
 

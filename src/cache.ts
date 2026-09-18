@@ -11,6 +11,9 @@ export interface CachedRegistration {
   executionMode?: unknown;
   constrainedSampling?: unknown;
   hasPrepareArguments?: boolean;
+  /** Pi system-prompt fields; a deferred proxy carries them so the prompt matches the real tool before first use. */
+  promptSnippet?: string;
+  promptGuidelines?: string[];
 }
 
 /** True when `value` is a JSON-schema object the host can validate against. */
@@ -199,7 +202,12 @@ function normalizeRegistrations(value: unknown): CachedRegistration[] {
     const executionMode = raw && "executionMode" in raw ? raw.executionMode : undefined;
     const constrainedSampling = raw && "constrainedSampling" in raw ? raw.constrainedSampling : undefined;
     const hasPrepareArguments = raw?.hasPrepareArguments === true ? true : undefined;
-    registrations.push({ name, description, parameters, executionMode, constrainedSampling, hasPrepareArguments });
+    const promptSnippet = typeof raw?.promptSnippet === "string" && raw.promptSnippet.trim() ? raw.promptSnippet.trim() : undefined;
+    const guidelines = Array.isArray(raw?.promptGuidelines)
+      ? raw.promptGuidelines.filter((g): g is string => typeof g === "string" && g.trim().length > 0).map((g) => g.trim())
+      : [];
+    const promptGuidelines = guidelines.length > 0 ? guidelines : undefined;
+    registrations.push({ name, description, parameters, executionMode, constrainedSampling, hasPrepareArguments, promptSnippet, promptGuidelines });
   }
   return registrations;
 }
