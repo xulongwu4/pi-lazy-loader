@@ -348,8 +348,8 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
         try {
           const state = loader.getPackageState(pkgName);
           if (!state) throw new Error(`Unknown configured package "${pkgName}"`);
-          removeLazyPackage(loader.getAgentDir(), state.definition.source);
-          const msg = `Removed "${state.definition.name}" from lazy-loader.json. Reload Pi after ensuring its Pi settings load it eagerly.`;
+          const label = removeLazyPackage(loader.getAgentDir(), state.definition.source);
+          const msg = `Removed "${state.definition.name}" from ${label}. Reload Pi after ensuring its Pi settings load it eagerly.`;
           if (ctx.hasUI) ctx.ui.notify(msg, "info");
           console.log(msg);
         } catch (err: any) {

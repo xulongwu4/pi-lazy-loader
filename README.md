@@ -31,7 +31,25 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 pi install git:github.com/xulongwu4/pi-lazy-loader@v0.8.0
 ```
 
-Declare lazy packages in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json`:
+Declare lazy packages in one of three places, checked in this order (first match wins, never merged):
+
+1. **Inline in `settings.json` `packages`** — add `"lazy"` to an object entry. `"lazy": true` defers with all cached proxies; `"lazy": {tools, commands, guidelines}` carries the same allowlists as the catalog object form. Pair with `"extensions": []` so Pi installs the package but does not load its extension code eagerly.
+2. **`"lazy-loader"` key in `settings.json`** — a `{ "packages": [...] }` block, same entry shape as below.
+3. **`lazy-loader.json`** in `${PI_CODING_AGENT_DIR:-~/.pi/agent}` — the standalone fallback.
+
+Inline form, the least duplicated option:
+
+```json
+{
+  "packages": [
+    "npm:pi-fabric",
+    { "source": "npm:pi-web-access", "extensions": [], "lazy": true },
+    { "source": "npm:pi-mcp-adapter", "extensions": [], "lazy": { "tools": ["mcp", "mcpScript"] } }
+  ]
+}
+```
+
+Catalog form (options 2 and 3):
 
 ```json
 {
@@ -71,7 +89,7 @@ When Fabric captures extension tools, keep only `fabric_exec` prompt-visible in 
 }
 ```
 
-`lazy-loader.json` is the loader's sole package catalog; the plugin does not inspect Pi's `settings.json`. Pi must still be configured not to load the same extension eagerly—for installed resource packages, an `"extensions": []` filter remains one way to do that.
+The catalog is read from the first matching location above; the three are never merged. Writes (`/lazy pin`) go back to whichever location provided the catalog — for inline entries, `pin` strips the `"lazy"` flag and leaves the rest of the package entry alone — resolving symlinks so dotfiles links survive. Pi must still be configured not to load the same extension eagerly—for installed resource packages, an `"extensions": []` filter remains one way to do that (built into the inline form).
 
 The unified cache is stored at `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`. Each package entry contains `commands` and `tools`. A deferred package without an entry is loaded eagerly once to populate both lists. Later sessions register proxies from the cached names and descriptions. Every successful package load refreshes the entry with all commands and tools exposed by that package.
 

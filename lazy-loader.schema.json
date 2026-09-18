@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/xulongwu4/pi-lazy-loader/blob/main/lazy-loader.schema.json",
-  "title": "pi-lazy-loader configuration",
+  "title": "pi-lazy-loader configuration (standalone lazy-loader.json, or the \"lazy-loader\" object inside settings.json)",
   "type": "object",
   "required": ["packages"],
   "additionalProperties": false,
