@@ -10,6 +10,8 @@ export interface PackageDefinition {
   commands?: CommandProxyDeclaration[];
   proxyCommands?: string[];
   proxyTools?: string[];
+  /** Tool names whose cached promptGuidelines are injected into the system prompt while hidden from Pi's native tool list. */
+  guidelineTools?: string[];
 }
 
 export function findPackageDefinition(

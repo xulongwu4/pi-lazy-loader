@@ -48,10 +48,11 @@ export function readLazyLoaderConfig(agentDir: string): LazyLoaderConfigResult {
       if (typeof source !== "string" || !source.trim()) throw new Error("package source must be a non-empty string");
       const definition = resolvePackageDefinition(source.trim(), agentDir);
       if (typeof item === "object" && item !== null) {
-        const unknown = Object.keys(item).filter((key) => key !== "source" && key !== "commands" && key !== "tools");
+        const unknown = Object.keys(item).filter((key) => !["source", "commands", "tools", "guidelines"].includes(key));
         if (unknown.length > 0) throw new Error(`"${source}" has unknown properties: ${unknown.join(", ")}`);
         if (Object.hasOwn(item, "commands")) definition.proxyCommands = proxyNames(item.commands, "commands", source);
         if (Object.hasOwn(item, "tools")) definition.proxyTools = proxyNames(item.tools, "tools", source);
+        if (Object.hasOwn(item, "guidelines")) definition.guidelineTools = proxyNames(item.guidelines, "guidelines", source);
       }
       if (packages.has(definition.name)) throw new Error(`duplicate package name "${definition.name}"`);
       packages.set(definition.name, definition);
