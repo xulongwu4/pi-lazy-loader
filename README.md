@@ -33,7 +33,7 @@ pi install git:github.com/xulongwu4/pi-lazy-loader@v0.8.0
 
 Declare lazy packages in one of three places, checked in this order (first match wins, never merged):
 
-1. **Inline in `settings.json` `packages`** — add `"lazy"` to an object entry. `"lazy": true` defers with all cached proxies; `"lazy": {tools, commands, guidelines}` carries the same allowlists as the catalog object form. Pair with `"extensions": []` so Pi installs the package but does not load its extension code eagerly.
+1. **Inline in `settings.json` `packages`** — add `"lazy"` to an object entry. `"lazy": true` defers with all cached proxies; `"lazy": {tools, commands}` carries the same allowlists as the catalog object form. Pair with `"extensions": []` so Pi installs the package but does not load its extension code eagerly.
 2. **`"lazy-loader"` key in `settings.json`** — a `{ "packages": [...] }` block, same entry shape as below.
 3. **`lazy-loader.json`** in `${PI_CODING_AGENT_DIR:-~/.pi/agent}` — the standalone fallback.
 
@@ -59,10 +59,6 @@ Catalog form (options 2 and 3):
       "source": "npm:pi-mcp-adapter",
       "commands": ["mcp", "mcp-auth"],
       "tools": ["mcp", "mcp__agent-lsp__rename_symbol"]
-    },
-    {
-      "source": "npm:@juicesharp/rpiv-todo",
-      "guidelines": ["todo"]
     }
   ]
 }
@@ -72,12 +68,7 @@ Catalog form (options 2 and 3):
 - In object form, an omitted `commands` or `tools` field uses all cached proxies of that type.
 - A present array is an allowlist; `[]` disables that proxy type, and cached names not listed are suppressed.
 - Explicit names absent from the cache still receive proxies, allowing conditional registrations to be requested.
-- `guidelines` lists tool names whose cached `promptGuidelines` are injected into the system prompt.
 - `lazy-loader.schema.json` describes this format for editor validation.
-
-### Prompt Guidance for Hidden Tools
-
-Pi renders a tool's `promptSnippet`/`promptGuidelines` only when the tool is in its active list. Under pi-fabric full-code mode extension tools are hidden behind `fabric_exec`, so proxied tools would appear as bare names. On each `before_agent_start` the loader appends a `## Deferred tools (pi-lazy-loader)` section listing the cached one-line snippet of every proxied tool Pi did not render itself, plus the full guidelines of tools named in that package's `guidelines` allowlist. Tools Pi already rendered are skipped, so nothing is duplicated on the native path.
 
 When Fabric captures extension tools, keep only `fabric_exec` prompt-visible in `~/.pi/agent/fabric.json`:
 

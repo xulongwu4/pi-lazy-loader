@@ -669,7 +669,6 @@ const expectedPackedFiles = [
   "src/package-locator.ts",
   "src/package.ts",
   "src/pi-host.ts",
-  "src/prompt-guidance.ts",
   "src/resolver.ts",
   "src/tool-proxy.ts",
 ].sort();

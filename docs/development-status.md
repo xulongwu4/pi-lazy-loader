@@ -6,6 +6,8 @@
 
 ## Executive Status
 
+Unreleased (post-v0.11.0): the `before_agent_start` prompt-injection hook, `src/prompt-guidance.ts`, and the per-package `guidelines` allowlist are removed — a standalone extension (`hidden-tool-snippets.ts`) now covers snippet injection for all Fabric-hidden extension tools, making the lazy-loader copy redundant. Stale `guidelines` keys in config now hit the unknown-property diagnostic. Proxies still carry `promptSnippet`/`promptGuidelines` on their definitions (v0.9.2), which is what external injectors read.
+
 `pi-lazy-loader` v0.10.0 is implemented, verified, and tagged. A `before_agent_start` hook appends a `## Deferred tools (pi-lazy-loader)` section to the system prompt for proxied tools absent from `systemPromptOptions.selectedTools` (i.e. hidden by pi-fabric): every such tool's cached `promptSnippet` (~10 tokens each) plus the full `promptGuidelines` of tools named in the new per-package `guidelines` allowlist in `lazy-loader.json`. Tools Pi rendered natively are skipped, so the native path is unchanged. This closes the discoverability gap that left definition-field-only packages such as `@juicesharp/rpiv-todo` unused under Fabric.
 
 `pi-lazy-loader` v0.9.2 is implemented, verified, and tagged. Deferred tool proxies now carry the real tool's `promptSnippet` and `promptGuidelines`. The cache persists both fields (trimmed snippet; blank or non-string guideline entries dropped), `refreshCache` captures them on every load, and `registerToolProxies` copies them onto the proxy definition, so Pi's system prompt lists the same one-line snippet and guidelines for a deferred tool as it would for the eagerly loaded one. Prompt fields are rendering metadata only and do not participate in the invoke-safety drift check. Note: under pi-fabric full-code mode, non-core extension tools are still listed by name only; this fix restores parity on Pi's native prompt path and for `capture.keepVisible` tools.
@@ -139,6 +141,7 @@ src/tool-proxy.ts
 | `v0.9.1` | Allow TypeBox `Type.Unsafe` schemas to round-trip and cache |
 | `v0.9.2` | Deferred tool proxies carry `promptSnippet`/`promptGuidelines` |
 | `v0.10.0` | Inject snippets (and allowlisted guidelines) for proxied tools hidden from Pi's native tool list |
+| unreleased | Remove prompt-injection hook and `guidelines` allowlist — superseded by external hidden-tool-snippets extension |
 
 ## Known Limitations
 

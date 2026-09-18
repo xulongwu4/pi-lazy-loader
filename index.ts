@@ -10,7 +10,6 @@ import {
 } from "./src/command-config.js";
 import { formatStartupDescription } from "./src/command-presentation.js";
 import { registerToolProxies } from "./src/tool-proxy.js";
-import { buildDeferredToolGuidance } from "./src/prompt-guidance.js";
 import { readCache, selectCachedRegistrations, updateCachedPackage } from "./src/cache.js";
 
 function formatStatus(status: PackageState["status"]): string {
@@ -134,16 +133,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       report.sessionStartCaptured = true;
       saveReport();
     }
-  });
-
-  // Pi renders promptSnippet/promptGuidelines only for tools in its active list. Fabric hides
-  // extension tools behind fabric_exec, so proxied tools would appear as bare names; inject the
-  // cached snippet (and allowlisted guidelines) for exactly the proxied tools Pi did not render.
-  pi.on("before_agent_start", (event: any) => {
-    const rendered = event?.systemPromptOptions?.selectedTools;
-    const guidance = buildDeferredToolGuidance(lazyPackages, cache, Array.isArray(rendered) ? rendered : []);
-    if (!guidance) return;
-    return { systemPrompt: `${event.systemPrompt}\n\n${guidance}` };
   });
 
   pi.on("resources_discover", (event: any, ctx: any) => {

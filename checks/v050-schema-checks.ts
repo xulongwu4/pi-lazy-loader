@@ -12,7 +12,6 @@ import {
   formatProxyGuidance,
   formatProxyDescription,
 } from "../src/tool-proxy.js";
-import { buildDeferredToolGuidance, DEFERRED_GUIDANCE_HEADER } from "../src/prompt-guidance.js";
 import {
   readCache,
   CACHE_FILENAME,
@@ -944,44 +943,6 @@ console.log("--- Check 17: promptSnippet/promptGuidelines Survive Deferral ---")
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-}
-
-// ---------------------------------------------------------------------------
-// Check 18: Deferred-tool prompt guidance for tools Pi did not render
-// ---------------------------------------------------------------------------
-console.log("--- Check 18: Deferred Tool Prompt Guidance ---");
-{
-  const guidanceCache: LazyLoaderCache = {
-    version: 1,
-    packages: {
-      "prompt-pkg": {
-        tools: [
-          { name: "todo", promptSnippet: "Manage a task list", promptGuidelines: ["Use todo for 3+ steps."] },
-          { name: "other", promptSnippet: "Other tool", promptGuidelines: ["Other guideline."] },
-          { name: "bare" },
-        ],
-        commands: [],
-      },
-    },
-  };
-  const pkg = { ...entry("prompt-pkg"), guidelineTools: ["todo"] };
-
-  const hidden = buildDeferredToolGuidance([pkg], guidanceCache, ["fabric_exec"]);
-  assert(hidden.startsWith(DEFERRED_GUIDANCE_HEADER), "guidance must start with the header");
-  assert(hidden.includes("- todo: Manage a task list") && hidden.includes("- other: Other tool"), "snippets must be emitted for every hidden proxied tool");
-  assert(!hidden.includes("bare"), "tools without a snippet or guidelines must not be listed");
-  assert(hidden.includes("- Use todo for 3+ steps."), "guidelines must be emitted for allowlisted tools");
-  assert(!hidden.includes("Other guideline."), "guidelines must not be emitted for non-allowlisted tools");
-
-  const native = buildDeferredToolGuidance([pkg], guidanceCache, ["todo", "other", "bare"]);
-  assert(native === "", "tools Pi already rendered must produce no guidance");
-
-  const filtered = buildDeferredToolGuidance([{ ...pkg, proxyTools: ["other"] }], guidanceCache, []);
-  assert(!filtered.includes("todo") && filtered.includes("- other: Other tool"), "tools outside the proxy allowlist must be skipped");
-
-  assert(buildDeferredToolGuidance([pkg], { version: 1, packages: {} }, []) === "", "empty cache must produce no guidance");
-
-  console.log("  \u2713 Snippets for hidden proxied tools, allowlisted guidelines, nothing for rendered tools");
 }
 
 console.log("\n==============================================");

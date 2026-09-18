@@ -27,12 +27,6 @@
                 "type": "array",
                 "uniqueItems": true,
                 "items": { "type": "string", "minLength": 1 }
-              },
-              "guidelines": {
-                "description": "Tool names whose promptGuidelines are injected into the system prompt while Pi's native tool list hides them (e.g. under pi-fabric); promptSnippet lines are always injected.",
-                "type": "array",
-                "uniqueItems": true,
-                "items": { "type": "string", "minLength": 1 }
               }
             }
           }

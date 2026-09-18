@@ -64,7 +64,7 @@ function inlineLazyEntries(settings: any): { entries: any[]; diagnostics: string
     if (flag === true) {
       entries.push({ source });
     } else if (flag !== null && typeof flag === "object" && !Array.isArray(flag)) {
-      const unknown = Object.keys(flag).filter((key) => !["commands", "tools", "guidelines"].includes(key));
+      const unknown = Object.keys(flag).filter((key) => !["commands", "tools"].includes(key));
       if (unknown.length > 0) {
         diagnostics.push(`"lazy" for "${source}" has unknown properties: ${unknown.join(", ")}`);
         continue;
@@ -72,7 +72,7 @@ function inlineLazyEntries(settings: any): { entries: any[]; diagnostics: string
       // Keep the entry even if a filter value is malformed — a bad "tools" value must not
       // silently disable the package (it is likely paired with "extensions": [] already).
       const clean: any = { source };
-      for (const field of ["commands", "tools", "guidelines"] as const) {
+      for (const field of ["commands", "tools"] as const) {
         if (!Object.hasOwn(flag, field)) continue;
         try {
           clean[field] = proxyNames(flag[field], `lazy.${field}`, source);
@@ -218,11 +218,10 @@ export function readLazyLoaderConfig(agentDir: string): LazyLoaderConfigResult {
       if (typeof source !== "string" || !source.trim()) throw new Error("package source must be a non-empty string");
       const definition = resolvePackageDefinition(source.trim(), agentDir);
       if (typeof item === "object" && item !== null) {
-        const unknown = Object.keys(item).filter((key) => !["source", "commands", "tools", "guidelines"].includes(key));
+        const unknown = Object.keys(item).filter((key) => !["source", "commands", "tools"].includes(key));
         if (unknown.length > 0) throw new Error(`"${source}" has unknown properties: ${unknown.join(", ")}`);
         if (Object.hasOwn(item, "commands")) definition.proxyCommands = proxyNames(item.commands, "commands", source);
         if (Object.hasOwn(item, "tools")) definition.proxyTools = proxyNames(item.tools, "tools", source);
-        if (Object.hasOwn(item, "guidelines")) definition.guidelineTools = proxyNames(item.guidelines, "guidelines", source);
       }
       if (packages.has(definition.name)) throw new Error(`duplicate package name "${definition.name}"`);
       packages.set(definition.name, definition);
