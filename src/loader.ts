@@ -390,6 +390,12 @@ export class LazyLoader {
     return await tool.execute(toolCallId, params, signal, onUpdate, ctx);
   }
 
+  getCapturedCommand(identifier: string, commandName: string): any | undefined {
+    const packageName = this.getPackageState(identifier)?.definition.name;
+    if (!packageName) return undefined;
+    return this.getCaptured(this.capturedCommands, packageName, commandName);
+  }
+
   getCapturedTool(identifier: string, toolName: string): any | undefined {
     const packageName = this.getPackageState(identifier)?.definition.name;
     if (!packageName) return undefined;

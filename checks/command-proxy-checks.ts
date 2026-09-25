@@ -207,6 +207,7 @@ const fixture = createMockPackageFixture({
     });
     pi.registerCommand("pi-mcp", {
       description: "real pi-mcp description",
+      getArgumentCompletions(prefix) { throw new Error("completer boom"); },
       async handler(args, ctx) { return "pi-mcp-result:" + args; },
     });
     pi.registerCommand("mcp-auth", {
@@ -240,7 +241,7 @@ try {
   assert(typeof startupMcp.getArgumentCompletions === "function", "Startup proxy must provide getArgumentCompletions");
 
   // 5.1 Pre-load completions return null without importing/loading package
-  const preLoadCompletions = startupMcp.getArgumentCompletions("test");
+  const preLoadCompletions = await startupMcp.getArgumentCompletions("test");
   assert(preLoadCompletions === null, "Pre-load completions on real startup proxy must return null");
   assert((globalThis as any).__mcpFactoryRunCount === undefined, "Pre-load completion must not run factory or import package");
   console.log("  ✓ Pre-load completions on real startup proxy return null without triggering package load");
@@ -278,9 +279,20 @@ try {
   assert(res2ViaStub === "pi-mcp-result:arg2-repeat", "Startup stub invocation after load works idempotently");
   assert((globalThis as any).__mcpFactoryRunCount === 1, "Subsequent command call must not re-run package factory");
 
-  // Completions post-load come from target
-  const comp = await cmdMcp.getArgumentCompletions("myprefix");
-  assert(comp[0].value === "myprefix-mcp", "Post-load completions must be served by real target");
+  // Completions post-load come from target — via the startup proxy, which is the only
+  // function Pi's autocomplete provider holds (it snapshots at startup, never rebuilds).
+  const comp = await startupMcp.getArgumentCompletions("myprefix");
+  assert(comp?.[0]?.value === "myprefix-mcp", "Post-load completions through the startup proxy must be served by real target");
+  const compDirect = await cmdMcp.getArgumentCompletions("myprefix");
+  assert(compDirect?.[0]?.value === "myprefix-mcp", "Committed command must keep the target's getArgumentCompletions");
+  // A throwing target completer must not escape the proxy (Pi's editor has no try/catch).
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    assert((await startupPiMcp.getArgumentCompletions("x")) === null, "Proxy must swallow a throwing target completer and return null");
+  } finally {
+    console.error = originalError;
+  }
 
   // No suffixed duplicate commands created
   assert(!fixture.registeredCommands.has("mcp:1"), "No :1 duplicate for /mcp");
