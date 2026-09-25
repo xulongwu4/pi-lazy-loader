@@ -1,6 +1,6 @@
 import { findPackageDefinition, type PackageDefinition } from "./package.js";
 import { resolvePackageEntries } from "./resolver.js";
-import { getAgentDir, importExtensionFactory, replayMissedLifecycle } from "./pi-host.js";
+import { addVisibleCommandName, getAgentDir, importExtensionFactory, replayMissedLifecycle } from "./pi-host.js";
 import { readLazyLoaderConfig } from "./config.js";
 import { updateCachedPackage, type CachedRegistration, isCachedToolSchema, schemaIsJsonRepresentable, cloneJsonValue } from "./cache.js";
 import {
@@ -107,7 +107,8 @@ export class LazyLoader {
   private agentDir: string;
   private reservedCommands = new Map<string, Map<string, ReserveCommandOptions>>();
   private capturedCommands = new Map<string, Map<string, any>>();
-  private protectedCommands = new Map<string, Set<string>>();
+  /** Late-rename notices held for the session_start warning while set (see collectNotices). */
+  private pendingNotices: string[] | undefined;
   /** Unreserved late registrations per package: target name -> name registered with Pi. */
   private directCommands = new Map<string, Map<string, string>>();
   private reservedTools = new Map<string, Set<string>>();
@@ -238,7 +239,7 @@ export class LazyLoader {
     for (const [pkg, reserved] of this.reservedCommands) {
       if (pkg === self) continue;
       for (const [name, meta] of reserved) {
-        if ((meta.proxyName ?? name) === registered && !this.protectedCommands.get(pkg)?.has(name)) return pkg;
+        if ((meta.proxyName ?? name) === registered) return pkg;
       }
     }
     for (const [pkg, direct] of this.directCommands) {
@@ -250,25 +251,39 @@ export class LazyLoader {
   /**
    * Forward an unreserved late command (stale cache or proxyCommands filter). Every lazy package
    * registers through this extension's API, where Pi replaces same-name commands instead of
-   * suffixing them, so bump to a free name:N rather than clobber another lazy package's command.
+   * suffixing them, so bump to a free name:N rather than clobber another lazy package's command
+   * or make Pi rename another extension's command. A re-registration reuses its first name.
    */
   private registerDirectCommand(packageName: string, name: string, command: any): any {
     const direct = this.ensureNested(this.directCommands, packageName, () => new Map<string, string>());
-    let registered = direct.get(name) ?? name;
-    const holder = this.commandHolder(registered, packageName);
-    if (holder) {
+    let registered = direct.get(name);
+    if (registered === undefined) {
+      // Live names (with bases of Pi-suffixed name:N) cover other extensions and this one's proxies.
       const visible = new Set<string>();
       try {
-        for (const command of this.pi.getCommands?.() ?? []) visible.add(command?.name);
+        for (const command of this.pi.getCommands?.() ?? []) {
+          if (typeof command?.name === "string") addVisibleCommandName(visible, command.name);
+        }
       } catch {}
-      let suffix = 1;
-      while (visible.has(`${name}:${suffix}`) || this.commandHolder(`${name}:${suffix}`, packageName)) suffix++;
-      registered = `${name}:${suffix}`;
-      console.error(
-        `[pi-lazy-loader] Command "/${name}" from "${packageName}" is already registered by "${holder}"; registering it as "/${registered}"`
-      );
+      const taken = (candidate: string) => visible.has(candidate) || this.commandHolder(candidate, packageName) !== undefined;
+      registered = name;
+      if (taken(name)) {
+        let suffix = 2; // the existing holder counts as the first
+        while (taken(`${name}:${suffix}`)) suffix++;
+        registered = `${name}:${suffix}`;
+        const message = `Command "/${name}" from "${packageName}" is already registered; registering it as "/${registered}"`;
+        if (this.pendingNotices) {
+          this.pendingNotices.push(message);
+        } else {
+          console.error(`[pi-lazy-loader] ${message}`);
+          const ctx = this.lifecycleState.sessionStart?.ctx;
+          try {
+            if (ctx?.hasUI) ctx.ui.notify(`pi-lazy-loader: ${message}`, "warning");
+          } catch {} // stale ctx after a session switch: the console line still records it
+        }
+      }
+      direct.set(name, registered);
     }
-    direct.set(name, registered);
     return this.pi.registerCommand(registered, command);
   }
 
@@ -291,6 +306,17 @@ export class LazyLoader {
         missingTools: [],
       });
     }
+  }
+
+  /** Hold late-rename notices (no console/UI output) until drainNotices() returns them. */
+  collectNotices(): void {
+    this.pendingNotices = [];
+  }
+
+  drainNotices(): string[] {
+    const notices = this.pendingNotices ?? [];
+    this.pendingNotices = undefined;
+    return notices;
   }
 
   setSessionStart(event: any, ctx: any) {
@@ -317,11 +343,6 @@ export class LazyLoader {
   reserveCommand(identifier: string, commandName: string, metadata?: ReserveCommandOptions): void {
     const packageName = this.requireDefinitionName(identifier);
     this.ensureNested(this.reservedCommands, packageName, () => new Map<string, ReserveCommandOptions>()).set(commandName, metadata ?? {});
-  }
-
-  protectCommand(identifier: string, commandName: string): void {
-    const packageName = this.requireDefinitionName(identifier);
-    this.ensureNested(this.protectedCommands, packageName, () => new Set<string>()).add(commandName);
   }
 
   reserveTool(identifier: string, toolName: string): void {
@@ -591,7 +612,6 @@ export class LazyLoader {
           return (name: string, command: any) => {
             observedCommands?.set(name, command);
             refreshIfLoaded();
-            if (this.protectedCommands.get(packageName)?.has(name)) return;
             if (this.reservedCommands.get(packageName)?.has(name)) {
               dispatchReservedStatus(
                 this.states.get(packageName)?.status,
@@ -617,7 +637,7 @@ export class LazyLoader {
           };
         }
         // Hide this package's uncommitted reserved proxies so skip-if-registered
-        // factories still call registerCommand/registerTool once. Leave protected
+        // factories still call registerCommand/registerTool once. Leave protected (tool)
         // names and already-observed names visible so a later check does not re-register.
         if (prop === "getCommands" && typeof target.getCommands === "function") {
           return (...args: any[]) => {
@@ -633,7 +653,7 @@ export class LazyLoader {
                 ? items.map((command: any) => aliases.has(command?.name) ? { ...command, name: aliases.get(command.name) } : command)
                 : items,
               this.reservedCommands.get(packageName),
-              this.protectedCommands.get(packageName),
+              undefined,
               observedCommands,
               (command: any) => command?.name,
             );

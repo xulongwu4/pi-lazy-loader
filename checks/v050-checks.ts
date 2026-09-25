@@ -592,6 +592,7 @@ console.log("--- Check 9: Explicit Catalog, Cache Bootstrap & Filtered Proxies -
     assert(secondPi.commands.has("arbitrary-command"), "configured cached command must create a proxy");
     assert(!secondPi.commands.has("hidden-command"), "unlisted cached command must not create a proxy");
     assert(secondPi.commands.get("colliding-command") === eagerCommand, "existing command must not be replaced by a proxy");
+    assert(secondPi.commands.has("colliding-command:2"), "colliding cached command must get a suffixed proxy");
     await secondLoader.loadPackage("arbitrary-pi-package");
     assert(secondPi.commands.get("colliding-command") === eagerCommand, "loaded package must not replace protected eager command");
 

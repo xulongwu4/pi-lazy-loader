@@ -142,6 +142,7 @@ src/tool-proxy.ts
 | `v0.9.2` | Deferred tool proxies carry `promptSnippet`/`promptGuidelines` |
 | `v0.10.0` | Inject snippets (and allowlisted guidelines) for proxied tools hidden from Pi's native tool list |
 | unreleased | Remove prompt-injection hook and `guidelines` allowlist — superseded by external hidden-tool-snippets extension |
+| `v0.13.0` | Register lazy command proxies whose names are already taken under a free `/cmd:N`; late commands never replace a registered command; renames reported in the UI |
 
 ## Known Limitations
 

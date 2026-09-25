@@ -18,12 +18,11 @@ function isRegisteredCommandName(name: unknown): name is string {
 
 /**
  * Validate cached registrations. Cross-package duplicates each get a proxy named like
- * Pi core resolves them (`name:1`, `name:2`, ... in package order).
+ * Pi core resolves them (`name:1`, `name:2`, ... in package order, bumped past taken names).
  */
 export function buildCommandDefinitions(packages: PackageDefinition[]): CommandConfigResult {
   const diagnostics: string[] = [];
   const definitions: Omit<MergedCommandDefinition, "proxyName">[] = [];
-  const owners = new Map<string, string[]>();
 
   for (const pkg of packages) {
     const seen = new Set<string>();
@@ -43,18 +42,17 @@ export function buildCommandDefinitions(packages: PackageDefinition[]): CommandC
         commandName: command.name,
         declaredDescription: command.description,
       });
-      owners.set(command.name, [...(owners.get(command.name) ?? []), pkg.name]);
     }
   }
 
-  // Like Pi's resolveRegisteredCommands (occurrence suffix, bumped past taken names), except
-  // names only one package declares are never renamed.
-  const taken = new Set(owners.keys());
+  const counts = new Map<string, number>();
+  for (const { commandName } of definitions) counts.set(commandName, (counts.get(commandName) ?? 0) + 1);
+  const taken = new Set(counts.keys());
   const occurrences = new Map<string, number>();
   return {
     definitions: definitions.map((definition) => {
       const name = definition.commandName;
-      if (owners.get(name)!.length === 1) return { ...definition, proxyName: name };
+      if (counts.get(name) === 1) return { ...definition, proxyName: name };
       let suffix = (occurrences.get(name) ?? 0) + 1;
       occurrences.set(name, suffix);
       while (taken.has(`${name}:${suffix}`)) suffix++;

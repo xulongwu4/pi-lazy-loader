@@ -65,7 +65,12 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     ...pkg,
     commands: selectCachedRegistrations(cache.packages[pkg.name]?.commands ?? [], pkg.proxyCommands),
   }));
-  const commandConfig = buildCommandDefinitions(cachedPackages);
+  // Shared names go to whichever package was cached first: cache entries are added in the order
+  // packages bootstrapped, i.e. the order their commands first registered and claimed names.
+  const cacheOrder = Object.keys(cache.packages);
+  const commandConfig = buildCommandDefinitions(
+    [...cachedPackages].sort((a, b) => cacheOrder.indexOf(a.name) - cacheOrder.indexOf(b.name))
+  );
   const definitions = commandConfig.definitions;
   const diagnostics = [...configured.diagnostics, ...commandConfig.diagnostics];
 
@@ -112,13 +117,19 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
 
     // A missing cache is bootstrapped once by eagerly loading that deferred package.
     const bootstrapDiagnostics: string[] = [];
-    for (const pkg of lazyPackages) {
-      if (Object.hasOwn(cache.packages, pkg.name)) continue;
-      const loaded = await loader.loadPackage(pkg.name);
-      if (!loaded.success) {
-        updateCachedPackage(loader.getAgentDir(), pkg.name, [], []);
-        bootstrapDiagnostics.push(`Failed to populate cache for "${pkg.name}": ${loaded.error}`);
+    // Late renames during bootstrap join the single startup warning instead of one toast each.
+    loader.collectNotices();
+    try {
+      for (const pkg of lazyPackages) {
+        if (Object.hasOwn(cache.packages, pkg.name)) continue;
+        const loaded = await loader.loadPackage(pkg.name);
+        if (!loaded.success) {
+          updateCachedPackage(loader.getAgentDir(), pkg.name, [], []);
+          bootstrapDiagnostics.push(`Failed to populate cache for "${pkg.name}": ${loaded.error}`);
+        }
       }
+    } finally {
+      bootstrapDiagnostics.push(...loader.drainNotices());
     }
     for (const diagnostic of bootstrapDiagnostics) console.error(`[pi-lazy-loader] ${diagnostic}`);
 
@@ -175,8 +186,9 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   // numeric suffixes; lazy packages sharing a name get explicit name:N proxies from
   // buildCommandDefinitions instead), and the pre-bind command set is order-dependent. Reservation is
   // internal-only and safe at load; proxy registration is deferred to session_start,
-  // where getCommands() is legal and sees the complete command set, so conflict
-  // outcomes are deterministic regardless of extension load order.
+  // where getCommands() sees every command registered during extension loading, so conflict
+  // outcomes do not depend on extension load order. (A command another extension registers
+  // after session_start is not seen; Pi then suffixes it against ours on its own.)
   const deferredDefinitions: MergedCommandDefinition[] = [];
   const packageDefinitions = new Map<string, MergedCommandDefinition[]>();
 
@@ -196,14 +208,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       });
       deferredDefinitions.push(def);
     }
-  }
-
-  function reportSkippedProxy(def: MergedCommandDefinition): string {
-    loader.protectCommand(def.packageName, def.commandName);
-    const diagnostic = `Command proxy "/${def.proxyName}" for "${def.packageName}" was skipped because "/${def.commandName}" is already registered`;
-    diagnostics.push(diagnostic);
-    console.error(`[pi-lazy-loader] ${diagnostic}`);
-    return diagnostic;
   }
 
   function registerCommandProxy(def: MergedCommandDefinition): void {
@@ -236,8 +240,8 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   }
 
   // Post-bind proxy registration: runs in session_start where pi.getCommands() is legal.
-  // Names already taken (eager commands, built-ins, other extensions) register no proxy
-  // and are protected so a later package load cannot stage them either.
+  // Names already taken (eager commands, built-ins, other extensions) get a free /name:N
+  // proxy (N >= 2) instead; the real command later commits under that same name.
   // Called first thing in session_start; diagnostics reach the UI via that handler's notify.
   let commandProxiesRegistered = false;
   function registerCommandProxies(): void {
@@ -254,13 +258,25 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       console.error(`[pi-lazy-loader] ${diagnostic}`);
       return;
     }
+    // visible also holds the base of every suffixed name, so a taken /cmd:N implies /cmd.
+    const taken = new Set(visible);
+    for (const def of deferredDefinitions) if (!visible.has(def.commandName)) taken.add(def.proxyName);
     for (const def of deferredDefinitions) {
-      // visible also holds the base of every suffixed name, so a taken /cmd:N implies /cmd.
       if (visible.has(def.commandName)) {
-        reportSkippedProxy(def);
-        continue;
+        let suffix = 2;
+        while (taken.has(`${def.commandName}:${suffix}`)) suffix++;
+        const proxyName = `${def.commandName}:${suffix}`;
+        const diagnostic = `Command "/${def.commandName}" from "${def.packageName}" is already registered; registering it as "/${proxyName}"`;
+        diagnostics.push(diagnostic);
+        console.error(`[pi-lazy-loader] ${diagnostic}`);
+        def.proxyName = proxyName; // shared with /lazy list
+        loader.reserveCommand(def.packageName, def.commandName, {
+          declaredDescription: def.declaredDescription,
+          decorateDescription: true,
+          proxyName,
+        });
       }
-      visible.add(def.proxyName);
+      taken.add(def.proxyName);
       registerCommandProxy(def);
     }
   }
