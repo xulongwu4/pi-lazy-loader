@@ -5,6 +5,8 @@ export interface MergedCommandDefinition extends CommandDescriptionContext {
   packageSource: string;
   /** Name registered with Pi: commandName, or commandName:N when several packages share it. */
   proxyName: string;
+  /** Cached: target has a completer, so the proxy may load the package to serve completions. */
+  hasArgumentCompletions?: boolean;
 }
 
 export interface CommandConfigResult {
@@ -41,6 +43,7 @@ export function buildCommandDefinitions(packages: PackageDefinition[]): CommandC
         packageSource: pkg.source,
         commandName: command.name,
         declaredDescription: command.description,
+        hasArgumentCompletions: command.hasArgumentCompletions,
       });
     }
   }

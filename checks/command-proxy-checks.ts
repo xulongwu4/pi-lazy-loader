@@ -22,7 +22,7 @@ const PACKAGES: PackageDefinition[] = [
     source: "npm:pi-mcp-adapter",
     aliases: ["pi-mcp-adapter", "npm:pi-mcp-adapter"],
     commands: [
-      { name: "mcp", description: "Show MCP server status" },
+      { name: "mcp", description: "Show MCP server status", hasArgumentCompletions: true },
       { name: "pi-mcp", description: "Show MCP server status" },
       { name: "mcp-auth", description: "Authenticate with an MCP server" },
     ],
@@ -240,17 +240,20 @@ try {
   assert(startupMcpAuth !== undefined, "Actual /mcp-auth startup proxy must be registered by index extension factory");
   assert(typeof startupMcp.getArgumentCompletions === "function", "Startup proxy must provide getArgumentCompletions");
 
-  // 5.1 Pre-load completions return null without importing/loading package
+  // 5.1 Pre-load completions: no cached completer → null without loading; cached completer → load on demand
+  assert(typeof startupMcpAuth.getArgumentCompletions === "function", "Startup proxy must provide getArgumentCompletions");
+  assert((await startupMcpAuth.getArgumentCompletions("test")) === null, "Pre-load completions without cached completer must return null");
+  assert((globalThis as any).__mcpFactoryRunCount === undefined, "Pre-load completion without cached completer must not run factory or import package");
   const preLoadCompletions = await startupMcp.getArgumentCompletions("test");
-  assert(preLoadCompletions === null, "Pre-load completions on real startup proxy must return null");
-  assert((globalThis as any).__mcpFactoryRunCount === undefined, "Pre-load completion must not run factory or import package");
-  console.log("  ✓ Pre-load completions on real startup proxy return null without triggering package load");
+  assert(preLoadCompletions?.[0]?.value === "test-mcp", "Pre-load completions with cached completer must load the package and serve real completions");
+  assert((globalThis as any).__mcpFactoryRunCount === 1, "Completion-triggered load must run the factory exactly once");
+  console.log("  ✓ Pre-load completions stay deferred without a cached completer and load on demand with one");
 
-  // 5.2 Invoking /mcp loads the factory once and captures all three declared commands
+  // 5.2 Invoking /mcp reuses the loaded factory and captures all three declared commands
   const ctx = { cwd: "/fixture", hasUI: true, ui: { notify() {} } };
   const res1 = await startupMcp.handler("arg1", ctx);
   assert(res1 === "mcp-result:arg1", "Invoking startup proxy for /mcp must execute captured handler and return result");
-  assert((globalThis as any).__mcpFactoryRunCount === 1, "Factory must execute exactly once upon first command invocation");
+  assert((globalThis as any).__mcpFactoryRunCount === 1, "Factory must not re-run on command invocation after completion-triggered load");
 
   // All 3 commands replaced in mockPi
   const cmdMcp = fixture.registeredCommands.get("mcp");

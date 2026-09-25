@@ -123,7 +123,7 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
 
 - Command Proxies: Cached stubs for every command exposed by a deferred package.
   - Registered only when the target package appears in `lazy-loader.json`.
-  - Pre-load completions return `null` without loading the package.
+  - Pre-load completions return `null` without loading the package, unless the cache recorded that the target has `getArgumentCompletions` (`hasArgumentCompletions`); then Tab loads the package on demand and serves the real completions.
   - First invocation executes the target factory once, stages and atomically commits registrations, forwards decorated description with delegated provenance (`[target: <pkg>; via pi-lazy-loader]`), and invokes the captured real handler for the in-flight call.
   - Replacement within Pi's command map creates no numeric `:1` suffixes.
   - Each proxy loads its own package, and the real command keeps the proxy's name. Names are recomputed each session from the cache, so they can shift if a package gains or drops a shared name.

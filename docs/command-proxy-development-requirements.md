@@ -34,7 +34,7 @@ A second UX issue is attribution. Pi correctly reports the proxy command's canon
 - Do not spoof or mutate Pi's canonical `sourceInfo`.
 - Do not patch `ExtensionRunner` internals.
 - Do not mutate Pi command maps or unregister commands through internal APIs. The only supported replacement is the target package's normal `registerCommand` call forwarded through the same public `ExtensionAPI`.
-- Do not load a package while the user merely requests argument completions.
+- Do not load a package on argument completion unless the cache recorded that the target has a completer (`hasArgumentCompletions`).
 - Do not proxy dynamically generated MCP prompt commands before the adapter loads.
 - Do not add project-local custom configuration that bypasses Pi's project-trust boundary.
 - Do not implement profile inheritance, watchers, daemons, or semantic intent matching.
@@ -356,7 +356,7 @@ Concurrent first invocations of different proxies belonging to the same package 
 
 ### FR-7: Argument Completions
 
-The startup stub may expose `getArgumentCompletions()` that returns `null`; requesting completion must not load the package. When the target registration is forwarded, Pi replaces the stub options with the real command options. Post-load completions therefore come directly from the target's `getArgumentCompletions` without a loader completion seam. Tests must prove both the pre-load `null` result and post-load target result.
+The startup stub exposes `getArgumentCompletions()`. When the cached registration has `hasArgumentCompletions: true`, requesting completion loads the package on demand (deduplicated with any in-flight load; a failed load logs and returns `null`) and delegates to the captured target; otherwise it returns `null` without loading. Pi snapshots the stub's completer at startup, so the stub always delegates. When the target registration is forwarded, Pi replaces the stub options with the real command options. Post-load completions therefore come directly from the target's `getArgumentCompletions` without a loader completion seam. Tests must prove the no-flag pre-load `null` result without load, the flagged pre-load on-demand load, and the post-load target result.
 
 ### FR-8: MCP Commands
 
@@ -462,7 +462,7 @@ Package status alone must not imply a command is available. Show per-command sta
 ### Startup Performance
 
 - Parsing built-in and user command metadata plus proxy registration should add less than 50 ms to the no-extension baseline on the measured host.
-- No target package module may be imported while registering proxies or requesting pre-load completions.
+- No target package module may be imported while registering proxies or requesting pre-load completions for commands without a cached completer.
 - The release must retain a positive interleaved A/B startup improvement for each newly deferred package.
 
 ### Compatibility
@@ -535,7 +535,7 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 | Registration | eager target skips proxy; deferred target registers proxy; all package commands reserved first |
 | Loading | one factory for concurrent commands; all target handlers captured; unrelated registrations forwarded |
 | Invocation | first call uses captured handler; exact args/context; async return; subsequent call uses forwarded real handler; unchanged loader-seam error |
-| Completions | no pre-load import; null before load; exact target result after load |
+| Completions | no import without cached completer (null); on-demand load with cached completer; exact target result after load |
 | Collision | target registration replaces the same-map stub; no `:1` suffix; duplicate target registration diagnosed |
 | Lifecycle | genuine events replayed; MCP and token-burden state initialized |
 | Provenance | sourceInfo remains loader; startup and post-load descriptions show target/proxy; target description is preserved; eager source genuine |
@@ -555,7 +555,7 @@ Run clean-pack installation, deterministic checks, real TUI checks, and alternat
 4. One MCP command loads the package once and captures all declared MCP commands.
 5. User configuration accepts string shorthand and object declarations in the same command array, and can add or override command metadata for existing manifest packages.
 6. Invalid user configuration fails softly with actionable diagnostics.
-7. Pre-load Tab completion never imports a deferred package.
+7. Pre-load Tab completion imports a deferred package only when its cache records a completer.
 8. Post-load completion comes from the forwarded real definition; description follows target → declaration → synthesized precedence.
 9. Command help visibly identifies both target and proxy.
 10. Canonical `sourceInfo` remains unmodified and documented.

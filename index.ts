@@ -215,8 +215,14 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       description: formatStartupDescription({ ...def, commandName: def.proxyName }),
       // Pi snapshots this function into its autocomplete provider at startup and never
       // re-reads the re-registered command, so delegate to the captured target once loaded.
+      // When the cache says the target has a completer, load on demand so completions
+      // work before the first invocation; otherwise stay deferred and return null.
       async getArgumentCompletions(prefix: string) {
         try {
+          if (def.hasArgumentCompletions) {
+            const loaded = await loader.loadPackage(def.packageName);
+            if (!loaded.success) console.error(`[pi-lazy-loader] /${def.proxyName} completions: failed to load ${def.packageName}: ${loaded.error}`);
+          }
           return (await loader.getCapturedCommand(def.packageName, def.commandName)?.getArgumentCompletions?.(prefix)) ?? null;
         } catch (error) {
           // Pi's editor has no try/catch around completers; a target bug must not break the editor.

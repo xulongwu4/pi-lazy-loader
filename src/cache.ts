@@ -11,6 +11,8 @@ export interface CachedRegistration {
   executionMode?: unknown;
   constrainedSampling?: unknown;
   hasPrepareArguments?: boolean;
+  /** Command target has getArgumentCompletions; a proxy loads the package on demand to serve them. */
+  hasArgumentCompletions?: boolean;
   /** Pi system-prompt fields; a deferred proxy carries them so the prompt matches the real tool before first use. */
   promptSnippet?: string;
   promptGuidelines?: string[];
@@ -202,12 +204,13 @@ function normalizeRegistrations(value: unknown): CachedRegistration[] {
     const executionMode = raw && "executionMode" in raw ? raw.executionMode : undefined;
     const constrainedSampling = raw && "constrainedSampling" in raw ? raw.constrainedSampling : undefined;
     const hasPrepareArguments = raw?.hasPrepareArguments === true ? true : undefined;
+    const hasArgumentCompletions = raw?.hasArgumentCompletions === true ? true : undefined;
     const promptSnippet = typeof raw?.promptSnippet === "string" && raw.promptSnippet.trim() ? raw.promptSnippet.trim() : undefined;
     const guidelines = Array.isArray(raw?.promptGuidelines)
       ? raw.promptGuidelines.filter((g): g is string => typeof g === "string" && g.trim().length > 0).map((g) => g.trim())
       : [];
     const promptGuidelines = guidelines.length > 0 ? guidelines : undefined;
-    registrations.push({ name, description, parameters, executionMode, constrainedSampling, hasPrepareArguments, promptSnippet, promptGuidelines });
+    registrations.push({ name, description, parameters, executionMode, constrainedSampling, hasPrepareArguments, hasArgumentCompletions, promptSnippet, promptGuidelines });
   }
   return registrations;
 }

@@ -70,7 +70,7 @@ If loading fails, staged reserved tools are discarded and the proxies remain. Pa
 }
 ```
 
-- Tool entries may include JSON-safe cached `parameters` plus `executionMode` / `constrainedSampling` / `hasPrepareArguments`. Commands store name and description only.
+- Tool entries may include JSON-safe cached `parameters` plus `executionMode` / `constrainedSampling` / `hasPrepareArguments`. Commands store name, description, and `hasArgumentCompletions`.
 - Non-JSON, cyclic, Refine/Codec, and unknown `~` schemas are omitted (fail closed); invalid files read as empty.
 - Cache-safe first deferred call load-then-invokes after live schema/options equivalence. Missing, stale, non-JSON, Refine/Codec, `prepareArguments`, or metadata mismatch returns `executed: false` `retryHandoff`; the model must call the live host tool. Proxy payloads never echo params.
 - Command proxies still load and invoke the captured handler on the in-flight first call.

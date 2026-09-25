@@ -1,6 +1,8 @@
 export interface CommandProxyDeclaration {
   name: string;
   description?: string;
+  /** Cached: target has getArgumentCompletions; the proxy loads the package on Tab to serve them. */
+  hasArgumentCompletions?: boolean;
 }
 
 export interface PackageDefinition {
