@@ -126,6 +126,7 @@ Pi runs its resource discovery pass (`resources_discover`) strictly during sessi
   - Pre-load completions return `null` without loading the package.
   - First invocation executes the target factory once, stages and atomically commits registrations, forwards decorated description with delegated provenance (`[target: <pkg>; via pi-lazy-loader]`), and invokes the captured real handler for the in-flight call.
   - Replacement within Pi's command map creates no numeric `:1` suffixes.
+  - Deferred packages sharing a command name each get a proxy named like Pi core would (`/cmd:1`, `/cmd:2`, in `lazy-loader.json` order; the numbering is recomputed each session from the cache, so it shifts if a package gains or drops the shared name). Each proxy loads its own package, and the real command keeps the proxy's name. A late command the cache didn't know about is bumped to a free `/cmd:N` rather than replacing another package's command.
 - `/lazy list`: Show status (`deferred`, `loading`, `loaded`, `failed`), discovered tools, and per-command readiness (`deferred`, `ready`, `missing`) for configured deferred packages.
 - `/lazy add <package>`: Dynamically load a package extension into the current session.
   - Idempotent: Subsequent calls return immediately.

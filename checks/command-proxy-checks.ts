@@ -97,9 +97,17 @@ const crossPackage = buildCommandDefinitions([
   { name: "one", source: "npm:one", commands: [{ name: "shared" }] },
   { name: "two", source: "npm:two", commands: [{ name: "shared" }] },
 ]);
-assert(!crossPackage.definitions.some((definition) => definition.commandName === "shared"), "Cross-package command conflicts must not register a proxy");
-assert(crossPackage.diagnostics.length > 0, "Cross-package command conflicts must produce diagnostics");
-console.log("  ✓ Cross-package cached command conflicts are skipped");
+assert(
+  JSON.stringify(crossPackage.definitions.map((d) => [d.packageName, d.proxyName])) === JSON.stringify([["one", "shared:1"], ["two", "shared:2"]]),
+  `Cross-package duplicates must get Pi-style name:N proxies, got ${JSON.stringify(crossPackage.definitions)}`
+);
+assert(crossPackage.diagnostics.length === 0, "Cross-package duplicates are supported, not diagnosed");
+const bumped = buildCommandDefinitions([
+  { name: "one", source: "npm:one", commands: [{ name: "shared" }, { name: "shared:1" }] },
+  { name: "two", source: "npm:two", commands: [{ name: "shared" }] },
+]).definitions.map((d) => d.proxyName);
+assert(JSON.stringify(bumped) === JSON.stringify(["shared:2", "shared:1", "shared:3"]), `Suffixes must skip taken names, got ${bumped}`);
+console.log("  ✓ Cross-package cached command duplicates get name:N proxies like Pi core");
 
 // -----------------------------------------------------------------------------
 // CHECK 2: Reserve Before Register & Multi-Command Capture
@@ -633,6 +641,121 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
     console.log("  ✓ Protected foreign owners stay visible so skip-if-registered factories do not steal them");
   } finally {
     collideFixture.cleanup();
+  }
+}
+
+{
+  // Two lazy packages registering the same command: two proxies, each loads its own target, names stay put.
+  const oneJs = `export default function (pi) {
+    pi.registerCommand("cmd", { description: "one", async handler(args) { return "one:" + args; } });
+  }`;
+  // dup-two uses the skip-if-registered + session_start replay pattern (Check 4b) against its cmd:2 proxy.
+  const twoJs = `export default function (pi) {
+    const register = () => {
+      if ((pi.getCommands?.() ?? []).some((c) => c.name === "cmd")) return;
+      pi.registerCommand("cmd", { description: "two", async handler(args) { return "two:" + args; } });
+    };
+    register();
+    pi.on("session_start", register);
+  }`;
+  const setupDup = async (options: { twoCached?: boolean; twoUncached?: boolean; twoJs?: string; preRegistered?: Record<string, any> } = {}) => {
+    const fixture = createMockPackageFixture({ packageName: "dup-one", indexJs: oneJs });
+    const twoDir = join(fixture.root, "npm", "node_modules", "dup-two");
+    mkdirSync(twoDir, { recursive: true });
+    writeFileSync(join(twoDir, "package.json"), JSON.stringify({ name: "dup-two", type: "module", pi: { extensions: ["./index.js"] } }));
+    writeFileSync(join(twoDir, "index.js"), options.twoJs ?? twoJs);
+    writeFileSync(join(fixture.root, "lazy-loader.json"), JSON.stringify({ packages: ["npm:dup-one", "npm:dup-two"] }));
+    writeCache(fixture.root, {
+      version: 1,
+      packages: {
+        "dup-one": { tools: [], commands: [{ name: "cmd" }] },
+        ...(options.twoUncached ? {} : { "dup-two": { tools: [], commands: options.twoCached === false ? [] : [{ name: "cmd" }] } }),
+      },
+    });
+    for (const [name, command] of Object.entries(options.preRegistered ?? {})) fixture.registeredCommands.set(name, command);
+    process.env.PI_CODING_AGENT_DIR = fixture.root;
+    lazyLoaderExtension(fixture.mockPi);
+    await fixture.mockPi.emitSessionStart();
+    const names = () => JSON.stringify([...fixture.registeredCommands.keys()].filter((n) => n.startsWith("cmd")).sort());
+    const run = (name: string, args: string) => fixture.registeredCommands.get(name).handler(args, { hasUI: false });
+    return { fixture, names, run };
+  };
+  const prevDir = process.env.PI_CODING_AGENT_DIR;
+  const fixtures: Array<{ cleanup(): void }> = [];
+  try {
+    {
+      const { fixture, names, run } = await setupDup();
+      fixtures.push(fixture);
+      assert(names() === '["cmd:1","cmd:2"]', `expected two proxies, got ${names()}`);
+      const two = await run("cmd:2", "x");
+      assert(two === "two:x", `/cmd:2 must load dup-two despite its replayed skip-if-registered guard, got ${two}`);
+      assert(names() === '["cmd:1","cmd:2"]', `loading dup-two must not rename commands, got ${names()}`);
+      assert(fixture.registeredCommands.get("cmd:2").description.includes("target: dup-two"), "/cmd:2 must be the committed real command");
+      assert(fixture.registeredCommands.get("cmd:1").description.includes("/cmd:1 [lazy target: dup-one"), "/cmd:1 must stay a proxy named /cmd:1");
+      assert((await run("cmd:1", "y")) === "one:y", "/cmd:1 proxy must load dup-one");
+      assert((await run("cmd:1", "z")) === "one:z", "committed /cmd:1 must run dup-one");
+      assert((await run("cmd:2", "w")) === "two:w", "committed /cmd:2 must still run dup-two");
+      assert(names() === '["cmd:1","cmd:2"]', `loading both must not rename commands, got ${names()}`);
+      let listed = "";
+      await fixture.registeredCommands.get("lazy").handler("list", { hasUI: true, ui: { notify(text: string) { listed = text; } } });
+      assert(listed.includes("/cmd:1 [ready]") && listed.includes("/cmd:2 [ready]"), `/lazy list must show proxy names, got ${listed}`);
+      console.log("  ✓ Duplicate lazy commands get /cmd:1 and /cmd:2 proxies that each load their own target without renaming");
+    }
+    {
+      const eager = { description: "eager", handler() { return "eager"; } };
+      const { fixture, names } = await setupDup({ preRegistered: { cmd: eager } });
+      fixtures.push(fixture);
+      assert(names() === '["cmd"]' && fixture.registeredCommands.get("cmd") === eager, `eager /cmd must suppress both proxies, got ${names()}`);
+      const foreign = { description: "foreign cmd:1", handler() { return "foreign"; } };
+      const second = await setupDup({ preRegistered: { "cmd:1": foreign } });
+      fixtures.push(second.fixture);
+      // A foreign /cmd:1 means Pi already suffixed a foreign /cmd, so both duplicates yield to it.
+      assert(second.names() === '["cmd:1"]' && second.fixture.registeredCommands.get("cmd:1") === foreign, `foreign /cmd:1 must suppress both proxies, got ${second.names()}`);
+      console.log("  ✓ Foreign owners of /cmd or /cmd:N suppress both duplicate proxies");
+    }
+    {
+      // Stale cache: dup-two's cmd is unknown, so dup-one alone owns /cmd and dup-two registers unreserved.
+      // Unguarded factory that also re-registers on session_start replay: the bumped name must be reused.
+      // (A skip-if-registered factory would simply yield /cmd to dup-one.)
+      const twiceJs = `export default function (pi) {
+    const register = () => pi.registerCommand("cmd", { description: "two", async handler(args) { return "two:" + args; } });
+    register();
+    pi.on("session_start", register);
+  }`;
+      const { fixture, names, run } = await setupDup({ twoCached: false, twoJs: twiceJs });
+      fixtures.push(fixture);
+      assert(names() === '["cmd"]', `only dup-one is proxied, got ${names()}`);
+      const proxy = fixture.registeredCommands.get("cmd");
+      await fixture.registeredCommands.get("lazy").handler("add dup-two", { hasUI: false });
+      assert(fixture.registeredCommands.get("cmd") === proxy, "unreserved dup-two must not clobber dup-one's /cmd proxy");
+      assert(names() === '["cmd","cmd:1"]', `unreserved duplicate must be bumped to /cmd:1, got ${names()}`);
+      assert((await run("cmd:1", "x")) === "two:x", "bumped /cmd:1 must run dup-two");
+      assert((await run("cmd", "y")) === "one:y", "/cmd must still load dup-one");
+      assert(names() === '["cmd","cmd:1"]', `loading dup-one must not rename commands, got ${names()}`);
+      console.log("  ✓ Unreserved late duplicates are bumped to a free /cmd:N instead of clobbering");
+    }
+    {
+      // Eager /cmd protects dup-one's reservation, so it is not a holder: stale dup-two keeps plain /cmd.
+      const eager = { description: "eager", handler() { return "eager"; } };
+      const { fixture, names } = await setupDup({ twoCached: false, twoJs: oneJs.replaceAll("one", "two"), preRegistered: { cmd: eager } });
+      fixtures.push(fixture);
+      await fixture.registeredCommands.get("lazy").handler("add dup-two", { hasUI: false });
+      assert(names() === '["cmd"]', `protected reservations must not bump direct registrations, got ${names()}`);
+      console.log("  ✓ Protected reservations do not bump unreserved late commands");
+    }
+    {
+      // Uncached dup-two is bootstrapped during session_start; dup-one's proxy must survive it.
+      const { fixture, names, run } = await setupDup({ twoUncached: true, twoJs: oneJs.replaceAll("one", "two") });
+      fixtures.push(fixture);
+      assert(names() === '["cmd","cmd:1"]', `bootstrap must not suppress dup-one's /cmd proxy, got ${names()}`);
+      assert((await run("cmd:1", "x")) === "two:x", "bootstrapped dup-two must own /cmd:1");
+      assert((await run("cmd", "y")) === "one:y", "/cmd must load dup-one");
+      console.log("  ✓ Bootstrapped uncached duplicates bump around startup proxies");
+    }
+  } finally {
+    if (prevDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prevDir;
+    for (const fixture of fixtures) fixture.cleanup();
   }
 }
 

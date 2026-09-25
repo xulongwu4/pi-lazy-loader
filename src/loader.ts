@@ -11,6 +11,8 @@ import {
 export interface ReserveCommandOptions {
   declaredDescription?: string;
   decorateDescription?: boolean;
+  /** Registered name when it differs from the target's (Pi-style `name:N` for cross-package duplicates). */
+  proxyName?: string;
 }
 
 export type PackageLoadStatus = "deferred" | "loading" | "loaded" | "failed";
@@ -106,6 +108,8 @@ export class LazyLoader {
   private reservedCommands = new Map<string, Map<string, ReserveCommandOptions>>();
   private capturedCommands = new Map<string, Map<string, any>>();
   private protectedCommands = new Map<string, Set<string>>();
+  /** Unreserved late registrations per package: target name -> name registered with Pi. */
+  private directCommands = new Map<string, Map<string, string>>();
   private reservedTools = new Map<string, Set<string>>();
   private capturedTools = new Map<string, Map<string, any>>();
   private protectedTools = new Map<string, Set<string>>();
@@ -219,14 +223,53 @@ export class LazyLoader {
           description: formatPostLoadDescription(
             {
               packageName,
-              commandName: name,
+              commandName: meta?.proxyName ?? name,
               declaredDescription: meta?.declaredDescription,
             } satisfies CommandDescriptionContext,
             targetOptions?.description,
           ),
         }
       : { ...targetOptions };
-    this.pi.registerCommand(name, committedOptions);
+    this.pi.registerCommand(meta?.proxyName ?? name, committedOptions);
+  }
+
+  /** Other package whose proxy or direct registration already holds the registered name. */
+  private commandHolder(registered: string, self: string): string | undefined {
+    for (const [pkg, reserved] of this.reservedCommands) {
+      if (pkg === self) continue;
+      for (const [name, meta] of reserved) {
+        if ((meta.proxyName ?? name) === registered && !this.protectedCommands.get(pkg)?.has(name)) return pkg;
+      }
+    }
+    for (const [pkg, direct] of this.directCommands) {
+      if (pkg !== self && [...direct.values()].includes(registered)) return pkg;
+    }
+    return undefined;
+  }
+
+  /**
+   * Forward an unreserved late command (stale cache or proxyCommands filter). Every lazy package
+   * registers through this extension's API, where Pi replaces same-name commands instead of
+   * suffixing them, so bump to a free name:N rather than clobber another lazy package's command.
+   */
+  private registerDirectCommand(packageName: string, name: string, command: any): any {
+    const direct = this.ensureNested(this.directCommands, packageName, () => new Map<string, string>());
+    let registered = direct.get(name) ?? name;
+    const holder = this.commandHolder(registered, packageName);
+    if (holder) {
+      const visible = new Set<string>();
+      try {
+        for (const command of this.pi.getCommands?.() ?? []) visible.add(command?.name);
+      } catch {}
+      let suffix = 1;
+      while (visible.has(`${name}:${suffix}`) || this.commandHolder(`${name}:${suffix}`, packageName)) suffix++;
+      registered = `${name}:${suffix}`;
+      console.error(
+        `[pi-lazy-loader] Command "/${name}" from "${packageName}" is already registered by "${holder}"; registering it as "/${registered}"`
+      );
+    }
+    direct.set(name, registered);
+    return this.pi.registerCommand(registered, command);
   }
 
   private commitReservedTool(packageName: string, name: string, tool: any): void {
@@ -564,7 +607,7 @@ export class LazyLoader {
               );
               return;
             }
-            return target.registerCommand(name, command);
+            return this.registerDirectCommand(packageName, name, command);
           };
         }
         if (prop === "on") {
@@ -577,13 +620,24 @@ export class LazyLoader {
         // factories still call registerCommand/registerTool once. Leave protected
         // names and already-observed names visible so a later check does not re-register.
         if (prop === "getCommands" && typeof target.getCommands === "function") {
-          return (...args: any[]) => filterUncommittedReserved(
-            target.getCommands(...args),
-            this.reservedCommands.get(packageName),
-            this.protectedCommands.get(packageName),
-            observedCommands,
-            (command: any) => command?.name,
-          );
+          return (...args: any[]) => {
+            // Present this package's name:N proxies under the target name, so the filter below
+            // and skip-if-registered factories treat them exactly like unsuffixed proxies.
+            const items = target.getCommands(...args);
+            const aliases = new Map<string, string>();
+            for (const [name, meta] of this.reservedCommands.get(packageName) ?? []) {
+              if (meta.proxyName && meta.proxyName !== name) aliases.set(meta.proxyName, name);
+            }
+            return filterUncommittedReserved(
+              aliases.size > 0 && Array.isArray(items)
+                ? items.map((command: any) => aliases.has(command?.name) ? { ...command, name: aliases.get(command.name) } : command)
+                : items,
+              this.reservedCommands.get(packageName),
+              this.protectedCommands.get(packageName),
+              observedCommands,
+              (command: any) => command?.name,
+            );
+          };
         }
         if (prop === "getAllTools" && typeof target.getAllTools === "function") {
           return (...args: any[]) => filterUncommittedReserved(
