@@ -38,7 +38,7 @@ function entry(name: string) {
 
 const objectSchema = { type: "object", properties: {}, additionalProperties: true };
 const webCache: LazyLoaderCache = {
-  version: 1,
+  version: 2,
   packages: {
     "pi-web-access": {
       tools: [
@@ -214,7 +214,7 @@ console.log("--- Check 19: Absent constrainedSampling Equals False ---");
     const samplePi = fakePi();
     const sampleLoader = new LazyLoader(samplePi as any, root, [entry("pi-web-access")]);
     registerToolProxies(samplePi, sampleLoader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": { tools: [{ name: "sample_tool", parameters: objectSchema }], commands: [] },
       },
@@ -225,7 +225,7 @@ console.log("--- Check 19: Absent constrainedSampling Equals False ---");
     const modePi = fakePi();
     const modeLoader = new LazyLoader(modePi as any, root, [entry("pi-web-access")]);
     registerToolProxies(modePi, modeLoader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": { tools: [{ name: "mode_tool", parameters: objectSchema }], commands: [] },
       },
@@ -286,7 +286,7 @@ console.log("--- Check 20: Live Semantic Schema Wrapper Takes Retry Handoff ---"
     const refinePi = fakePi();
     const refineLoader = new LazyLoader(refinePi as any, root, [entry("pi-web-access")]);
     registerToolProxies(refinePi, refineLoader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": { tools: [{ name: "refined_tool", parameters: cachedParameters }], commands: [] },
       },
@@ -297,7 +297,7 @@ console.log("--- Check 20: Live Semantic Schema Wrapper Takes Retry Handoff ---"
     const codecPi = fakePi();
     const codecLoader = new LazyLoader(codecPi as any, root, [entry("pi-web-access")]);
     registerToolProxies(codecPi, codecLoader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": { tools: [{ name: "codec_tool", parameters: cachedParameters }], commands: [] },
       },

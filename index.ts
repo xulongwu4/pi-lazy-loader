@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { SettingsManager, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { writeFileSync } from "node:fs";
 
 import { LazyLoader, type PackageState } from "./src/loader.js";
@@ -11,6 +11,10 @@ import {
 import { formatStartupDescription } from "./src/command-presentation.js";
 import { registerToolProxies } from "./src/tool-proxy.js";
 import { readCache, selectCachedRegistrations, updateCachedPackage } from "./src/cache.js";
+
+// Survive extension module re-imports without sharing activation between SDK sessions.
+const reloadSelections: WeakMap<object, string[]> =
+  ((globalThis as any)[Symbol.for("pi-lazy-loader.reloadSelections")] ??= new WeakMap());
 
 function formatStatus(status: PackageState["status"]): string {
   switch (status) {
@@ -85,7 +89,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     ? {
         steps: [],
         observedToolCalls: [],
-        bootstrapErrors: [],
         sessionStartCaptured: false,
         resourcesDiscoverCaptured: false,
       }
@@ -108,9 +111,16 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
 
   let toolProxiesRegistered = false;
 
+  pi.on("session_shutdown", (event, ctx) => {
+    if (event.reason === "reload") reloadSelections.set(ctx.sessionManager, pi.getActiveTools());
+  });
+
   // 1. Eagerly capture genuine lifecycle events at startup for late replay
   pi.on("session_start", async (event: any, ctx: any) => {
     loader.setSessionStart(event, ctx);
+    const toolsBefore = new Set(pi.getAllTools().map((tool) => tool.name));
+    const beforeReload = event.reason === "reload" ? reloadSelections.get(ctx.sessionManager) : undefined;
+    reloadSelections.delete(ctx.sessionManager);
     // Before bootstrap: an uncached package's late commands must see (and bump around) the
     // proxies, not register first and be mistaken for a foreign owner of their names.
     registerCommandProxies();
@@ -121,7 +131,8 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     loader.collectNotices();
     try {
       for (const pkg of lazyPackages) {
-        if (Object.hasOwn(cache.packages, pkg.name)) continue;
+        const cached = cache.packages[pkg.name];
+        if (cached && !cached.tools.some((tool) => tool.requiresEagerLoad)) continue;
         const loaded = await loader.loadPackage(pkg.name);
         if (!loaded.success) {
           updateCachedPackage(loader.getAgentDir(), pkg.name, [], []);
@@ -138,6 +149,12 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       diagnostics.push(...registerToolProxies(pi, loader, lazyPackages, cache));
       toolProxiesRegistered = true;
     }
+
+    // Pi resolves defaultTools before session_start, when these late names are still unknown.
+    // Reapply only explicit additions for new tools; leave existing selections and exposure to Pi.
+    const selected = beforeReload ?? SettingsManager.inMemory(pi.getSettings?.() ?? {}).getDefaultTools?.() ?? [];
+    const added = pi.getAllTools().filter((tool) => !toolsBefore.has(tool.name) && selected.includes(tool.name));
+    if (added.length > 0) pi.setActiveTools([...new Set([...pi.getActiveTools(), ...added.map((tool) => tool.name)])]);
 
     const sessionDiagnostics = [...diagnostics, ...bootstrapDiagnostics];
     if (sessionDiagnostics.length > 0 && ctx.hasUI) {
@@ -162,18 +179,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
       const name = e?.toolName ?? e?.name;
       report.observedToolCalls.push(name);
       saveReport();
-    });
-
-    pi.on("tool_result", (e: any) => {
-      const contentStr = JSON.stringify(e?.content ?? "");
-      const detailsStr = JSON.stringify(e?.details ?? "");
-      if (contentStr.includes("Pi Fabric has not bootstrapped") || detailsStr.includes("Pi Fabric has not bootstrapped")) {
-        report.bootstrapErrors.push({
-          tool: e?.toolName,
-          content: e?.content,
-        });
-        saveReport();
-      }
     });
   }
 

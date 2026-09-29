@@ -2,7 +2,7 @@ import { findPackageDefinition, type PackageDefinition } from "./package.js";
 import { resolvePackageEntries } from "./resolver.js";
 import { addVisibleCommandName, getAgentDir, importExtensionFactory, replayMissedLifecycle } from "./pi-host.js";
 import { readLazyLoaderConfig } from "./config.js";
-import { updateCachedPackage, type CachedRegistration, isCachedToolSchema, schemaIsJsonRepresentable, cloneJsonValue } from "./cache.js";
+import { updateCachedPackage, type CachedRegistration, cachedToolMetadata, TOOL_METADATA_FIELDS, isCachedToolSchema, schemaIsJsonRepresentable, cloneJsonValue } from "./cache.js";
 import {
   type CommandDescriptionContext,
   formatPostLoadDescription,
@@ -176,6 +176,10 @@ export class LazyLoader {
             name,
             description: typeof value?.description === "string" ? value.description : undefined,
             parameters,
+            ...cachedToolMetadata(value ?? {}),
+            requiresEagerLoad: typeof value?.prepareLoadout === "function"
+              || TOOL_METADATA_FIELDS.some((key) => value?.[key] !== undefined && !schemaIsJsonRepresentable(value[key]))
+              || undefined,
             executionMode: value?.executionMode,
             constrainedSampling: value?.constrainedSampling,
             hasPrepareArguments: typeof value?.prepareArguments === "function" ? true : undefined,

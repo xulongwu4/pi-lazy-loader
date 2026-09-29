@@ -61,7 +61,7 @@ function entry(name: string) {
 
 const objectSchema = { type: "object", properties: {}, additionalProperties: true };
 const webCache: LazyLoaderCache = {
-  version: 1,
+  version: 2,
   packages: {
     "pi-web-access": {
       tools: [
@@ -84,7 +84,7 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
   mkdirSync(root, { recursive: true });
   try {
     writeFileSync(join(root, CACHE_FILENAME), JSON.stringify({
-      version: 1,
+      version: 2,
       packages: { "legacy-pkg": { tools: [{ name: "legacy_tool", description: "old" }], commands: [] } },
     }), "utf-8");
     const legacy = readCache(root).packages["legacy-pkg"]?.tools[0];
@@ -125,7 +125,7 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
     (globalThis as any).__v050Chk10Exec = 0;
 
     const schemaCache: LazyLoaderCache = {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": {
           tools: [
@@ -137,7 +137,7 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
       },
     };
     const noSchemaCache: LazyLoaderCache = {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": { tools: [{ name: "web_search" }], commands: [] },
       },
@@ -242,7 +242,7 @@ console.log("--- Check 11: Nested CacheDriftError Is Not Swallowed ---");
     const loader = new LazyLoader(pi as any, root, [entry("outer-pkg")]);
     (globalThis as any).__v050Chk11Loader = loader;
     registerToolProxies(pi, loader, [entry("outer-pkg")], {
-      version: 1,
+      version: 2,
       packages: {
         "outer-pkg": { tools: [{ name: "outer_tool", parameters: { type: "object", properties: {} } }], commands: [] },
       },
@@ -292,7 +292,7 @@ console.log("--- Check 12: Failed Load Does Not Stage Post-Failure Reserved Tool
     const pi = fakePi();
     const loader = new LazyLoader(pi as any, root, [entry("failing-pkg")]);
     registerToolProxies(pi, loader, [entry("failing-pkg")], {
-      version: 1,
+      version: 2,
       packages: {
         "failing-pkg": { tools: [{ name: "web_search", parameters: objectSchema }], commands: [] },
       },
@@ -352,7 +352,7 @@ console.log("--- Check 13: Schema Mismatch Takes Retry Handoff ---");
     const pi = fakePi();
     const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": {
           tools: [{ name: "web_search", parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } }],
@@ -390,7 +390,7 @@ console.log("--- Check 14: Invalid Cached Schema Falls Back To Retry Handoff ---
   mkdirSync(root, { recursive: true });
   try {
     writeFileSync(join(root, CACHE_FILENAME), JSON.stringify({
-      version: 1,
+      version: 2,
       packages: { "disk-pkg": { tools: [{ name: "array_tool", parameters: [] }], commands: [] } },
     }), "utf-8");
     assert(readCache(root).packages["disk-pkg"]?.tools[0]?.parameters === undefined, "array parameters on disk must not be treated as a schema");
@@ -415,7 +415,7 @@ console.log("--- Check 14: Invalid Cached Schema Falls Back To Retry Handoff ---
     const pi = fakePi();
     const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": { tools: [{ name: "web_search", parameters: [] }], commands: [] },
       },
@@ -467,7 +467,7 @@ console.log("--- Check 14b: hasPrepareArguments Gates First-Call Invoke ---");
     const pi = fakePi();
     const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": {
           tools: [
@@ -523,7 +523,7 @@ console.log("--- Check 14c: Unsafe Cached Schema Uses Permissive Host Validation
     const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     const strictSchema = { type: "object", properties: { n: { type: "number" } }, required: ["n"] };
     registerToolProxies(pi, loader, [entry("pi-web-access")], {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": {
           tools: [{ name: "prepare_tool", parameters: strictSchema, hasPrepareArguments: true }],
@@ -848,7 +848,7 @@ console.log("--- Check 16: Live Option Mismatch Takes Retry Handoff ---");
     (globalThis as any).__v050Chk16Mode = 0;
     (globalThis as any).__v050Chk16Sample = 0;
     const modeCache: LazyLoaderCache = {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": {
           tools: [{ name: "mode_tool", parameters: objectSchema, executionMode: "parallel" }],
@@ -857,7 +857,7 @@ console.log("--- Check 16: Live Option Mismatch Takes Retry Handoff ---");
       },
     };
     const sampleCache: LazyLoaderCache = {
-      version: 1,
+      version: 2,
       packages: {
         "pi-web-access": {
           tools: [{ name: "sample_tool", parameters: objectSchema, constrainedSampling: { maxTokens: 1 } }],

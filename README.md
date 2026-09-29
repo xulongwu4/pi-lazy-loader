@@ -2,6 +2,13 @@
 
 General-purpose deferred extension loader for Pi coding agent. Packages listed in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json` can be loaded mid-session without `/reload`; command and tool proxies are discovered from one persistent cache.
 
+## v0.15.0
+
+- **Fixed:** Native Pi 0.99.1 codemode metadata, first-call structured output, and inactive-tool activation across reloads.
+- **Changed:** Cache v2 rebuilds older entries once; malformed tool policy triggers a safe rebuild and non-serializable contracts stay eager.
+- **Removed:** Fabric-specific runtime behavior and external-package/provider requirements from verification checks.
+- **Known limitation:** With `--no-builtin-tools`, a settings-selected inactive lazy tool can activate differently from an eager tool. Use `--no-tools` to disable all tools or an explicit `--tools` allowlist.
+
 ## Startup Overhead & Performance Impact
 
 Phase 0 profiling on host `solus` measured total extension startup overhead at **5.268 s** (baseline `pi -ne`: 0.565 s; full startup with 36 packages: 5.833 s).
@@ -28,7 +35,7 @@ The table is the Phase 0 opportunity map, not a recommendation to defer every en
 ## Installation and Configuration
 
 ```bash
-pi install git:github.com/xulongwu4/pi-lazy-loader@v0.8.0
+pi install git:github.com/xulongwu4/pi-lazy-loader@v0.15.0
 ```
 
 Declare lazy packages in one of three places, checked in this order (first match wins, never merged):
@@ -42,7 +49,6 @@ Inline form, the least duplicated option:
 ```json
 {
   "packages": [
-    "npm:pi-fabric",
     { "source": "npm:pi-web-access", "extensions": [], "lazy": true },
     { "source": "npm:pi-mcp-adapter", "extensions": [], "lazy": { "tools": ["mcp", "mcpScript"] } }
   ]
@@ -70,19 +76,22 @@ Catalog form (options 2 and 3):
 - Explicit names absent from the cache still receive proxies, allowing conditional registrations to be requested.
 - `lazy-loader.schema.json` describes this format for editor validation.
 
-When Fabric captures extension tools, keep only `fabric_exec` prompt-visible in `~/.pi/agent/fabric.json`:
+Native Pi codemode needs no additional gateway extension. Enable it in `settings.json`:
 
 ```json
 {
-  "capture": {
-    "keepVisible": ["fabric_exec"]
-  }
+  "defaultTools": ["+codemode"],
+  "codemode": { "mode": "only" }
 }
 ```
 
+Use `"mode": "on"` to keep direct tool declarations alongside codemode.
+
 The catalog is read from the first matching location above; the three are never merged. Writes (`/lazy pin`) go back to whichever location provided the catalog — for inline entries, `pin` strips the `"lazy"` flag and leaves the rest of the package entry alone — resolving symlinks so dotfiles links survive. Pi must still be configured not to load the same extension eagerly—for installed resource packages, an `"extensions": []` filter remains one way to do that (built into the inline form).
 
-The unified cache is stored at `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`. Each package entry contains `commands` and `tools`. A deferred package without an entry is loaded eagerly once to populate both lists. Later sessions register proxies from the cached names and descriptions. Every successful package load refreshes the entry with all commands and tools exposed by that package.
+The unified cache is stored at `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader-cache.json`. Each package entry contains `commands` and `tools`. A deferred package without an entry is loaded eagerly once to populate both lists. Later sessions register proxies from the cached names, schemas, and metadata. Every successful package load refreshes the entry with all commands and tools exposed by that package.
+
+Cache format **v2** preserves native Pi tool contracts. Old v1 caches are automatically discarded and rebuilt on the next session; this causes a one-time eager load of configured packages.
 
 ---
 
@@ -100,17 +109,20 @@ Extensions that register LLM providers (e.g. `pi-devin`, `pi-cline-pass`) must r
 `pi-antigravity` appears in the measured top ten because it costs 0.250 s. Defer it only when you do **not** need an Antigravity-provided model at startup; otherwise leave its settings entry eager and accept the smaller saving (4.007 s, 76.1% of the measured overhead). It can still be loaded later before switching models.
 
 ### 3. Lifecycle Replay
-Extensions such as `pi-fabric` initialize internal state (e.g. `state.bootstrap(context)`) inside `session_start` listeners. When loaded mid-session, that event has already fired.
+Extensions often initialize internal state inside `session_start` listeners. When loaded mid-session, that event has already fired.
 - `pi-lazy-loader` captures genuine `session_start` and `resources_discover` event objects and contexts at eager startup.
 - Late-loaded factories run with a `pi` Proxy that intercepts `pi.on`.
 - Handlers registered for `session_start` and `resources_discover` are replayed **exactly once** using the genuine event and context objects.
-- This lets `pi-fabric` bootstrap cleanly without throwing `"Pi Fabric has not bootstrapped"`.
 
-### 4. Fabric Gateway Compatibility
+### 4. Native Codemode Compatibility
 
-Keep `pi-fabric` **eager** when using Fabric as the exclusive tool gateway. Although late loading registers and executes `fabric_exec`, Fabric loaded after session startup cannot attach its capture interceptor to the already-running bundled `ExtensionRunner`; subsequently loaded extension tools remain top-level. With Fabric eager, dynamically loaded tools are captured correctly. Keep only `fabric_exec` in Fabric `capture.keepVisible`; after each load a tool proxy refreshes Fabric's catalog and restores that active set, preventing same-turn policy leaks.
+Verified against Pi **0.99.1** in both `on` and `only` modes. Proxies preserve `exposure`, `defaultActive`, `outputSchema`, `namespace`, and `annotations` before first use. Hidden/model-only tools stay unavailable to codemode; codemode/deferred tools stay inactive but callable. Structured results are objects from the first cache-safe call.
 
-A typical v0.7.0 `lazy-loader.json` defers `pi-web-access`, `pi-mcp-adapter`, `@quintinshaw/pi-dynamic-workflows`, and `pi-token-burden`, but not `pi-fabric` or `@tintinweb/pi-subagents`.
+Tool activation is owned by Pi; the loader does not restore or override a gateway-specific active set. Explicit `defaultTools` selections also apply to newly registered proxies, including tools with `defaultActive: false`, using Pi’s own settings resolver. `/reload` preserves user activation choices for those inactive-by-default tools instead of resetting them from settings; reload state is isolated per session. Host exclusions remain enforced. A live metadata mismatch hands off without executing the target. Packages with `prepareLoadout` hooks or non-JSON metadata load eagerly each session because those contracts cannot be serialized safely.
+
+Invalid cached `exposure` or `defaultActive` values invalidate the entire package entry and trigger an eager rebuild, rather than exposing a tool with unsafe fallback defaults.
+
+Pi 0.99.1’s CLI `--no-tools` maps to SDK `noTools: "all"`; both keep lazy tools unavailable, even when listed in `defaultTools`. The SDK also accepts `"builtin"` for built-in-only disabling; boolean `noTools: true` is not a supported option. Use `tools: [...]` for an explicit allowlist.
 
 ### 5. Resources-Discovery Ceiling
 Pi runs its resource discovery pass (`resources_discover`) strictly during session startup. While `pi-lazy-loader` replays `resources_discover` so extension callbacks execute their internal book-keeping, Pi does not discover new skills or themes mid-session. This is why keeping skills eager in `settings.json` is essential.
@@ -151,35 +163,28 @@ Pi's public extension API does not permit third-party extensions to spoof or mut
 
 ### Configuration Scope
 
-Only `${agentDir}/lazy-loader.json` is read. Pi `settings.json` and project-level `.pi/settings.json` are not inspected.
+Package catalogs follow the Configuration sources above. Tool activation reads Pi’s effective `defaultTools` through the extension API; the loader does not rewrite Pi settings files.
 
 ### Reload & Restart Semantics
 
 Changes to `lazy-loader.json` take effect after restarting Pi or issuing `/reload`. No filesystem watcher or background daemon is used.
 ### LLM Tools
 
-- **Direct tool proxies:** Startup proxies register under every cached tool name for deferred packages. Cache-safe tools (JSON-representable schema, no `prepareArguments`, live schema/options match the cache) load the package and invoke the captured `execute` on the first deferred call. Missing/stale/non-JSON schema, `prepareArguments`, or metadata mismatch return `executed: false` `retryHandoff` and require a second call against the live host schema/options. Surviving stale-cache proxies return terminal `cacheDrift`; failed loads return terminal reload guidance. Under Fabric, loaded tools are captured as `extensions.*` while the native active set remains `fabric_exec` (restored via `finally`). Command proxies still load and invoke the captured handler on first use.
+- **Direct tool proxies:** Startup proxies register under every cached tool name for deferred packages. Cache-safe tools (JSON-representable schema, no `prepareArguments`, live schema/options match the cache) load the package and invoke the captured `execute` on the first deferred call. Missing/stale/non-JSON schema, `prepareArguments`, or metadata mismatch return `executed: false` `retryHandoff` and require a new call against the live host schema/options (a new script for codemode). A proxy declaring `outputSchema` marks this handoff `isError: true`, so scripts reject instead of silently treating guidance text as structured output. Surviving stale-cache proxies return terminal `cacheDrift`; failed loads return terminal reload guidance. Command proxies still load and invoke the captured handler on first use.
 - **Sticky Session Failure**: If a package fails to load during a session, subsequent proxy or `/lazy add` calls fail fast without re-entering the load path. Retrying requires `/reload` or session restart.
 
 ---
 
 ## Verification & Checks
 
-Run the verification suite:
+Install test dependencies with `bun install`. All checks use temporary fixtures; no globally installed extensions, model credentials, or paid API calls are required.
 
 ```bash
-bun checks/run-checks.ts
+bun run check          # resolver, lifecycle, config, and real Pi/QuickJS integration
+bun run check:command  # command forwarding, concurrency, failures
+bun run check:proxy    # command collisions, atomic commits, packaging
+bun run check:v050     # cache, schemas, first-call handoff, late registrations
+bun run check:codemode # native on/only modes, metadata, visibility, structured results
 ```
 
-Run `bun checks/phase4-command-checks.ts` for command-proxy capture, concurrency, repeat-call, forwarding, and error checks.
-Run `bun checks/command-proxy-checks.ts` for cached command validation, user configuration, atomic staged-commit, multi-command capture, and packaging allowlist checks.
-Run `bun checks/v050-checks.ts` for explicit lazy-loader.json package discovery, first-run cache bootstrap, all-command/tool capture, cache-driven proxies, drift/failed terminal states, eager protection, and Fabric restoration.
-
-The suite covers:
-1. **File/Directory Entry Resolution**: Validates resolution of single files, directory conventions (`llm-wiki/index.ts`), and multi-file packages (`pi-quotas` 6 entries), plus error handling.
-2. **Idempotent & Concurrent State**: Proves 5 concurrent load requests share one promise, reload is idempotent, and partial failure is marked `failed`.
-3. **Safe Settings Pin Transform**: Proves unknown properties are preserved, writes are atomic, and missing/ambiguous entries are refused (tested strictly on temporary data; never modifies user settings).
-4. **Non-interactive End-to-End Proof**: Runs `pi` non-interactively:
-   - A missing-cache package is loaded eagerly at session start.
-   - The unified cache captures its exposed tool.
-   - The tool executes in the same session (`answer_42` -> `42`).
+Native codemode checks use the pinned Pi 0.99.1 development dependency and cover cold/warm caches, concurrent first calls, exposure and activation defaults, explicit tool selections, reload/session isolation, CLI-equivalent `--no-tools`, eager-only contracts, metadata drift, structured-output error paths, corrupt policy fields, and v1 cache invalidation.

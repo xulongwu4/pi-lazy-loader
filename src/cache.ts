@@ -11,11 +11,27 @@ export interface CachedRegistration {
   executionMode?: unknown;
   constrainedSampling?: unknown;
   hasPrepareArguments?: boolean;
+  /** Contracts containing executable hooks or non-JSON metadata must stay eager. */
+  requiresEagerLoad?: boolean;
+  exposure?: unknown;
+  defaultActive?: unknown;
+  outputSchema?: unknown;
+  namespace?: unknown;
+  annotations?: unknown;
   /** Command target has getArgumentCompletions; a proxy loads the package on demand to serve them. */
   hasArgumentCompletions?: boolean;
   /** Pi system-prompt fields; a deferred proxy carries them so the prompt matches the real tool before first use. */
   promptSnippet?: string;
   promptGuidelines?: string[];
+}
+
+export const TOOL_METADATA_FIELDS = ["exposure", "defaultActive", "outputSchema", "namespace", "annotations"] as const;
+
+/** Copy only metadata that survives the cache round trip, without retaining mutable schema objects. */
+export function cachedToolMetadata(value: Partial<CachedRegistration>) {
+  return Object.fromEntries(TOOL_METADATA_FIELDS
+    .filter((key) => value[key] !== undefined && schemaIsJsonRepresentable(value[key]))
+    .map((key) => [key, cloneJsonValue(value[key])]));
 }
 
 /** True when `value` is a JSON-schema object the host can validate against. */
@@ -184,7 +200,7 @@ export interface CachedPackage {
 }
 
 export interface LazyLoaderCache {
-  version: 1;
+  version: 2;
   packages: Record<string, CachedPackage>;
 }
 
@@ -210,32 +226,42 @@ function normalizeRegistrations(value: unknown): CachedRegistration[] {
       ? raw.promptGuidelines.filter((g): g is string => typeof g === "string" && g.trim().length > 0).map((g) => g.trim())
       : [];
     const promptGuidelines = guidelines.length > 0 ? guidelines : undefined;
-    registrations.push({ name, description, parameters, executionMode, constrainedSampling, hasPrepareArguments, hasArgumentCompletions, promptSnippet, promptGuidelines });
+    registrations.push({
+      ...cachedToolMetadata(raw ?? {}),
+      name, description, parameters, executionMode, constrainedSampling, hasPrepareArguments, hasArgumentCompletions, promptSnippet, promptGuidelines,
+      requiresEagerLoad: raw?.requiresEagerLoad === true ? true : undefined,
+    });
   }
   return registrations;
 }
 
 /** Read the unified command/tool cache. Invalid files fail soft as an empty cache. */
 export function readCache(agentDir: string): LazyLoaderCache {
-  const empty: LazyLoaderCache = { version: 1, packages: {} };
+  const empty: LazyLoaderCache = { version: 2, packages: {} };
   const cachePath = join(agentDir, CACHE_FILENAME);
   if (!existsSync(cachePath)) return empty;
 
   try {
     const parsed = JSON.parse(readFileSync(cachePath, "utf-8"));
-    if (parsed?.version !== 1 || !parsed.packages || typeof parsed.packages !== "object" || Array.isArray(parsed.packages)) {
+    if (parsed?.version !== 2 || !parsed.packages || typeof parsed.packages !== "object" || Array.isArray(parsed.packages)) {
       return empty;
     }
 
     const packages: Record<string, CachedPackage> = {};
     for (const [name, value] of Object.entries(parsed.packages) as [string, any][]) {
       if (!Array.isArray(value?.tools) || !Array.isArray(value?.commands)) continue;
+      // Missing metadata uses Pi defaults; malformed metadata must not silently grant those defaults.
+      // Rebuild the entire package so an invalid hidden tool is never published as a direct proxy.
+      if (value.tools.some((tool: any) =>
+        (tool?.exposure !== undefined && !["direct", "model-only", "codemode", "deferred", "hidden"].includes(tool.exposure))
+        || (tool?.defaultActive !== undefined && typeof tool.defaultActive !== "boolean")
+      )) continue;
       packages[name] = {
         tools: normalizeRegistrations(value.tools),
         commands: normalizeRegistrations(value.commands),
       };
     }
-    return { version: 1, packages };
+    return { version: 2, packages };
   } catch {
     return empty;
   }

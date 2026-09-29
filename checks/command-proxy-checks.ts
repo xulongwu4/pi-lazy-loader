@@ -180,7 +180,7 @@ function createMockPackageFixture(options: MockPackageFixtureOptions) {
   );
   const cachedCommands = PACKAGES.find((pkg) => pkg.name === options.packageName)?.commands ?? [];
   writeCache(root, {
-    version: 1,
+    version: 2,
     packages: { [options.packageName]: { tools: [], commands: cachedCommands } },
   });
 
@@ -653,7 +653,7 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
     writeFileSync(join(twoDir, "index.js"), options.twoJs ?? twoJs);
     writeFileSync(join(fixture.root, "lazy-loader.json"), JSON.stringify({ packages: ["npm:dup-one", "npm:dup-two"] }));
     writeCache(fixture.root, {
-      version: 1,
+      version: 2,
       packages: {
         ...(options.oneUncached ? {} : { "dup-one": { tools: [], commands: [{ name: "cmd" }] } }),
         ...(options.twoUncached ? {} : { "dup-two": { tools: [], commands: (options.twoCommands ?? (options.twoCached === false ? [] : ["cmd"])).map((name) => ({ name })) } }),
@@ -704,7 +704,7 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
       const single = createMockPackageFixture({ packageName: "dup-one", indexJs: oneJs });
       fixtures.push(single);
       writeFileSync(join(single.root, "lazy-loader.json"), JSON.stringify({ packages: ["npm:dup-one"] }));
-      writeCache(single.root, { version: 1, packages: { "dup-one": { tools: [], commands: [{ name: "cmd" }] } } });
+      writeCache(single.root, { version: 2, packages: { "dup-one": { tools: [], commands: [{ name: "cmd" }] } } });
       single.registeredCommands.set("cmd", eager);
       process.env.PI_CODING_AGENT_DIR = single.root;
       lazyLoaderExtension(single.mockPi);

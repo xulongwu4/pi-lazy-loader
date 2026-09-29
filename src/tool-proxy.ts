@@ -2,7 +2,7 @@ import { Type } from "typebox";
 
 import type { PackageDefinition } from "./package.js";
 import { isExecutableCapture, type LazyLoader, type PackageLoadResult } from "./loader.js";
-import { isCachedToolSchema, schemaIsJsonRepresentable, schemasEquivalent, selectCachedRegistrations, type LazyLoaderCache } from "./cache.js";
+import { cachedToolMetadata, TOOL_METADATA_FIELDS, isCachedToolSchema, schemaIsJsonRepresentable, schemasEquivalent, selectCachedRegistrations, type CachedRegistration, type LazyLoaderCache } from "./cache.js";
 
 export function formatProxyNote(packageName: string, toolName: string): string {
   return `This deferred proxy loads package "${packageName}" on first use and then invokes "${toolName}".`;
@@ -18,17 +18,6 @@ export function formatProxyDescription(baseDescription: string, packageName: str
   return `${cleanBase}. ${note}`;
 }
 
-async function loadForProxy(pi: any, loader: LazyLoader, packageName: string): Promise<PackageLoadResult> {
-  const activeBefore = pi.getActiveTools?.() ?? [];
-  const fabricActive = activeBefore.includes("fabric_exec");
-  try {
-    const result = await loader.loadPackage(packageName);
-    pi.getAllTools?.(); // Let Fabric observe newly registered tools before active-set restoration.
-    return result;
-  } finally {
-    if (fabricActive) pi.setActiveTools?.(activeBefore);
-  }
-}
 
 function cacheDrift(packageName: string, toolName: string) {
   return {
@@ -61,17 +50,21 @@ function retryHandoff(packageName: string, toolName: string, loaded?: PackageLoa
     content: [{
       type: "text",
       text: loaded
-        ? `Loaded package "${packageName}". Tool "${toolName}" was not executed. Call "${toolName}" again using its loaded schema.`
-        : `Package "${packageName}" is loaded. Call "${toolName}" again using its loaded schema.`,
+        ? `Loaded package "${packageName}". Tool "${toolName}" was not executed. Call "${toolName}" again using its loaded schema (use a new script in codemode).`
+        : `Package "${packageName}" is loaded. Call "${toolName}" again using its loaded schema (use a new script in codemode).`,
     }],
     details,
   };
 }
 
 function invokeMetadataEquivalent(
-  cached: { hasPrepareArguments?: boolean; executionMode?: unknown; constrainedSampling?: unknown },
-  live: { prepareArguments?: unknown; executionMode?: unknown; constrainedSampling?: unknown },
+  cached: CachedRegistration,
+  live: Partial<CachedRegistration> & { prepareArguments?: unknown; prepareLoadout?: unknown },
 ): boolean {
+  if (cached.requiresEagerLoad || typeof live.prepareLoadout === "function") return false;
+  if (!TOOL_METADATA_FIELDS.every((key) =>
+    (live[key] === undefined || schemaIsJsonRepresentable(live[key])) && schemasEquivalent(cached[key], live[key])
+  )) return false;
   if ((typeof live.prepareArguments === "function") !== (cached.hasPrepareArguments === true)) return false;
   if (cached.executionMode !== live.executionMode) return false;
   const sampling = (value: unknown) => (value === undefined || value === false ? false : value);
@@ -79,8 +72,8 @@ function invokeMetadataEquivalent(
 }
 
 function cachedInvokeIsSafe(
-  cached: { parameters?: unknown; hasPrepareArguments?: boolean; executionMode?: unknown; constrainedSampling?: unknown },
-  live?: { parameters?: unknown; prepareArguments?: unknown; executionMode?: unknown; constrainedSampling?: unknown },
+  cached: CachedRegistration,
+  live?: Partial<CachedRegistration> & { prepareArguments?: unknown; prepareLoadout?: unknown },
 ): boolean {
   // true is intentionally first-call-unsafe (proxy cannot run prepareArguments).
   // false and undefined both mean "no prepareArguments" and may invoke.
@@ -137,6 +130,7 @@ export function registerToolProxies(
       const description = formatProxyDescription(baseDesc, entry.name, declaration.name, canInvoke);
 
       const proxyTool: any = {
+        ...cachedToolMetadata(declaration),
         name: declaration.name,
         label: declaration.name,
         description,
@@ -152,7 +146,7 @@ export function registerToolProxies(
               content: [{ type: "text", text: `Loading deferred package ${entry.name}...` }],
               details: {},
             });
-            loaded = await loadForProxy(pi, loader, entry.name);
+            loaded = await loader.loadPackage(entry.name);
             if (!loaded.success) {
               return loadFailure(entry.name, declaration.name, loaded.error);
             }
@@ -162,7 +156,11 @@ export function registerToolProxies(
           if (!isExecutableCapture("tool", captured)) return cacheDrift(entry.name, declaration.name);
 
           if (!cachedInvokeIsSafe(declaration, captured)) {
-            return retryHandoff(entry.name, declaration.name, loaded);
+            return {
+              ...retryHandoff(entry.name, declaration.name, loaded),
+              // Codemode scripts expecting an object must not mistake handoff text for a result.
+              ...(declaration.outputSchema !== undefined ? { isError: true } : {}),
+            };
           }
 
           return await loader.invokeCapturedTool(entry.name, declaration.name, toolCallId, params, signal, onUpdate, ctx);

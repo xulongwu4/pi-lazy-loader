@@ -60,7 +60,7 @@ function entry(name: string) {
 
 const objectSchema = { type: "object", properties: {}, additionalProperties: true };
 const webCache: LazyLoaderCache = {
-  version: 1,
+  version: 2,
   packages: {
     "pi-web-access": {
       tools: [
@@ -82,7 +82,7 @@ console.log("--- Check 1: Proxy Registration & Description ---");
   const pi = fakePi();
   const loader = new LazyLoader(pi as any, tmpdir(), [entry("pi-web-access")]);
   const cacheWithDesc: LazyLoaderCache = {
-    version: 1,
+    version: 2,
     packages: {
       "pi-web-access": {
         tools: [
@@ -156,8 +156,7 @@ console.log("--- Check 2: Proxy Loads Package Then Invokes the Real Tool ---");
     (globalThis as any).__v050FactoryCount = 0;
     (globalThis as any).__v050ExecCount = 0;
 
-    const active = ["fabric_exec"];
-    const pi = fakePi(active);
+    const pi = fakePi(["codemode"]);
     const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
     registerToolProxies(pi, loader, [entry("pi-web-access")], webCache);
 
@@ -181,14 +180,14 @@ console.log("--- Check 2: Proxy Loads Package Then Invokes the Real Tool ---");
     assert(forwarded.signal === signal, "abort signal identity must be preserved");
     assert(forwarded.onUpdate === onUpdate, "onUpdate identity must be preserved");
     assert(forwarded.ctx === ctx, "tool context identity must be preserved");
-    assert(JSON.stringify(pi.restored.at(-1)) === JSON.stringify(active), "proxy load must restore Fabric active tools");
+    assert(pi.restored.length === 0, "proxy load must leave tool activation to native Pi");
 
     const staleProxyResult = await proxy.execute("call-2", { q: "again" }, signal, onUpdate, ctx);
     assert(staleProxyResult.content[0].text === "executed", "a stale proxy reference must still invoke the real tool");
     assert((globalThis as any).__v050FactoryCount === 1, "stale proxy reference must not reload the package");
     assert((globalThis as any).__v050ExecCount === 2, "stale proxy reference must invoke the real tool again");
 
-    console.log("  ✓ Proxy loads once, invokes the real tool with original arguments, and restores Fabric");
+    console.log("  ✓ Proxy loads once, invokes the real tool with original arguments, and leaves activation to Pi");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -451,7 +450,7 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
     await loader.loadPackage("pi-web-access");
 
     const cache = readCache(root);
-    assert(cache.version === 1, "unified cache version must be 1");
+    assert(cache.version === 2, "unified cache version must be 2");
     const cachedPackage = cache.packages["pi-web-access"];
     assert(cachedPackage, "pi-web-access must be cached");
     assert(cachedPackage.tools.find((item) => item.name === "web_search")?.description === "Fresh web search description", "tool description cached");
@@ -463,7 +462,7 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
     const cleared = readCache(root).packages["pi-web-access"];
     assert(cleared?.tools.length === 0 && cleared.commands.length === 0, "empty observations clear stale registrations");
 
-    writeFileSync(join(root, CACHE_FILENAME), JSON.stringify({ version: 1, packages: { incomplete: { tools: [] } } }), "utf-8");
+    writeFileSync(join(root, CACHE_FILENAME), JSON.stringify({ version: 2, packages: { incomplete: { tools: [] } } }), "utf-8");
     assert(!readCache(root).packages.incomplete, "package entries missing commands or tools must be repopulated");
 
     writeFileSync(join(root, CACHE_FILENAME), "{not-json", "utf-8");
@@ -471,7 +470,7 @@ console.log("--- Check 7: Unified Command and Tool Cache ---");
     writeFileSync(join(root, CACHE_FILENAME), JSON.stringify({ version: 99, packages: {} }), "utf-8");
     assert(Object.keys(readCache(root).packages).length === 0, "unknown cache version must fail soft");
 
-    writeCache(root, { version: 1, packages: {} });
+    writeCache(root, { version: 2, packages: {} });
     const cacheModule = new URL("../src/cache.ts", import.meta.url).href;
     const exits = await Promise.all(Array.from({ length: 8 }, (_, index) =>
       new Promise<number | null>((resolveExit) => {
