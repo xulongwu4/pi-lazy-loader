@@ -8,7 +8,6 @@ import { validateToolArguments } from "@earendil-works/pi-ai";
 import { CacheDriftError, LazyLoader } from "../src/loader.js";
 import {
   registerToolProxies,
-  formatProxyNote,
   formatProxyGuidance,
   formatProxyDescription,
 } from "../src/tool-proxy.js";
@@ -129,7 +128,7 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
       packages: {
         "pi-web-access": {
           tools: [
-            { name: "web_search", parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } },
+            { name: "web_search", description: "Real web search", parameters: { type: "object", properties: { q: { type: "string" } }, required: ["q"] } },
             { name: "late_tool", parameters: { type: "object" } },
           ],
           commands: [],
@@ -161,8 +160,8 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
       JSON.stringify(searchProxy.parameters) === JSON.stringify({ type: "object", properties: { q: { type: "string" } }, required: ["q"] }),
       "proxy must register with the cached parameter schema"
     );
-    assert(searchProxy.description.includes(formatProxyNote("pi-web-access", "web_search")), "schema proxy description must be load-then-invoke");
-    assert(formatProxyDescription("Search", "pi-web-access", "web_search", false).includes(formatProxyGuidance("pi-web-access", "web_search")), "retry description helper must keep the handoff note");
+    assert(searchProxy.description === "Real web search", "schema proxy must preserve the original description without loading notes");
+    assert(formatProxyDescription("Search", "pi-web-access", "web_search").includes(formatProxyGuidance("pi-web-access", "web_search")), "retry description helper must keep the handoff note");
 
     const signal = AbortSignal.abort();
     const onUpdate = () => {};
@@ -481,7 +480,7 @@ console.log("--- Check 14b: hasPrepareArguments Gates First-Call Invoke ---");
     const prepareProxy = pi.tools.get("prepare_tool");
     const plainProxy = pi.tools.get("plain_tool");
     assert(prepareProxy.description.includes(formatProxyGuidance("pi-web-access", "prepare_tool")), "hasPrepareArguments true must use retry guidance");
-    assert(plainProxy.description.includes(formatProxyNote("pi-web-access", "plain_tool")), "hasPrepareArguments false must use invoke note");
+    assert(plainProxy.description === "", "hasPrepareArguments false must preserve the empty description without loading notes");
     const prepareResult = await prepareProxy.execute("prep", {});
     assert(prepareResult.details.executed === false && prepareResult.details.retryTool === "prepare_tool", "hasPrepareArguments true must not first-call invoke");
     assert((globalThis as any).__v050Chk14bPrepare === 0, "hasPrepareArguments true must not run execute");

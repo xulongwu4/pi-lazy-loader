@@ -16,7 +16,7 @@ Package loading is internal (`LazyLoader.loadPackage`, `/lazy add`, cache bootst
 
 Startup proxies register under cached tool names for deferred packages (honor `lazy-loader.json` `tools` allowlists).
 
-- **Description:** Cached tool description, else `Tools provided by <package>`. Appends a load-then-invoke note when the cached schema is JSON-safe and `hasPrepareArguments` is not true; otherwise appends retry-guidance.
+- **Description:** Cache-safe proxies preserve the cached description verbatim (including whitespace and empty strings), without loading notes, to avoid declaration churn on first load. Load-only proxies keep retry guidance and the package-name fallback.
 - **Parameters:** Cached JSON-safe `parameters` when `isCachedToolSchema`; otherwise `Type.Object({}, { additionalProperties: true })`. Cached `executionMode` / `constrainedSampling` are copied onto the proxy.
 - **Privacy:** Proxy payloads never echo caller params.
 

@@ -6,12 +6,7 @@ import { spawn } from "node:child_process";
 import lazyLoaderExtension from "../index.js";
 import { LazyLoader } from "../src/loader.js";
 import { CONFIG_FILENAME, readLazyLoaderConfig } from "../src/config.js";
-import {
-  registerToolProxies,
-  formatProxyNote,
-  formatProxyGuidance,
-  formatProxyDescription,
-} from "../src/tool-proxy.js";
+import { registerToolProxies } from "../src/tool-proxy.js";
 import {
   readCache,
   selectCachedRegistrations,
@@ -101,25 +96,11 @@ console.log("--- Check 1: Proxy Registration & Description ---");
   assert(searchProxy, "web_search proxy must be registered");
   assert(fetchProxy, "fetch_content proxy must be registered");
 
-  const expectedSearchNote = formatProxyNote("pi-web-access", "web_search");
   assert(
-    searchProxy.description.includes("Search the web using multi-provider queries"),
-    "web_search description must prefer cached description"
+    searchProxy.description === "Search the web using multi-provider queries.",
+    "cache-safe proxy description must match the cached description exactly"
   );
-  assert(
-    searchProxy.description.includes(expectedSearchNote),
-    "web_search description must contain the deferred-proxy note"
-  );
-
-  const expectedFetchNote = formatProxyNote("pi-web-access", "fetch_content");
-  assert(
-    fetchProxy.description.includes("Tools provided by pi-web-access"),
-    "cached tool without a description must use the package-name fallback"
-  );
-  assert(
-    fetchProxy.description.includes(expectedFetchNote),
-    "fetch_content description must contain the deferred-proxy note"
-  );
+  assert(fetchProxy.description === "", "cache-safe proxy without a description must not invent one");
 
   assert(selectCachedRegistrations(cacheWithDesc.packages["pi-web-access"].tools, []).length === 0, "empty allowlist must disable the proxy type");
   assert(selectCachedRegistrations([], ["conditional_tool"])[0]?.name === "conditional_tool", "listed uncached names must still receive proxies");

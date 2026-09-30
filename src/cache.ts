@@ -211,8 +211,8 @@ function normalizeRegistrations(value: unknown): CachedRegistration[] {
     const name = typeof item === "string" ? item.trim() : typeof item?.name === "string" ? item.name.trim() : "";
     if (!name) continue;
     const description =
-      typeof item === "object" && typeof item?.description === "string" && item.description.trim()
-        ? item.description.trim()
+      typeof item === "object" && typeof item?.description === "string"
+        ? item.description
         : undefined;
     const raw = typeof item === "object" && item !== null ? (item as Record<string, unknown>) : undefined;
     const rawParameters = raw?.parameters;

@@ -27,7 +27,7 @@
     "check:command": "bun checks/phase4-command-checks.ts",
     "check:proxy": "bun checks/command-proxy-checks.ts",
     "check:v050": "bun checks/v050-checks.ts && bun checks/v050-schema-checks.ts && bun checks/v050-late-checks.ts",
-    "check:codemode": "bun checks/codemode-checks.ts"
+    "check:codemode": "bun checks/codemode-checks.ts && bun checks/exposure-cache-probe.ts"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.99.1"

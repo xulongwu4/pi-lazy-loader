@@ -4,18 +4,13 @@ import type { PackageDefinition } from "./package.js";
 import { isExecutableCapture, type LazyLoader, type PackageLoadResult } from "./loader.js";
 import { cachedToolMetadata, TOOL_METADATA_FIELDS, isCachedToolSchema, schemaIsJsonRepresentable, schemasEquivalent, selectCachedRegistrations, type CachedRegistration, type LazyLoaderCache } from "./cache.js";
 
-export function formatProxyNote(packageName: string, toolName: string): string {
-  return `This deferred proxy loads package "${packageName}" on first use and then invokes "${toolName}".`;
-}
-
 export function formatProxyGuidance(packageName: string, toolName: string): string {
   return `This deferred proxy loads package "${packageName}" without executing "${toolName}". After loading completes, call "${toolName}" again using its loaded schema.`;
 }
 
-export function formatProxyDescription(baseDescription: string, packageName: string, toolName: string, invoke = true): string {
+export function formatProxyDescription(baseDescription: string, packageName: string, toolName: string): string {
   const cleanBase = baseDescription.trim().replace(/\.+$/, "");
-  const note = invoke ? formatProxyNote(packageName, toolName) : formatProxyGuidance(packageName, toolName);
-  return `${cleanBase}. ${note}`;
+  return `${cleanBase}. ${formatProxyGuidance(packageName, toolName)}`;
 }
 
 
@@ -127,7 +122,9 @@ export function registerToolProxies(
       const baseDesc = declaration.description?.trim() || `Tools provided by ${entry.name}`;
       const schema = declaration.parameters;
       const canInvoke = cachedInvokeIsSafe(declaration);
-      const description = formatProxyDescription(baseDesc, entry.name, declaration.name, canInvoke);
+      const description = canInvoke
+        ? declaration.description ?? ""
+        : formatProxyDescription(baseDesc, entry.name, declaration.name);
 
       const proxyTool: any = {
         ...cachedToolMetadata(declaration),
