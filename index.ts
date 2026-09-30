@@ -10,6 +10,7 @@ import {
 } from "./src/command-config.js";
 import { formatStartupDescription } from "./src/command-presentation.js";
 import { registerToolProxies } from "./src/tool-proxy.js";
+import { packageFingerprint } from "./src/resolver.js";
 import { readCache, selectCachedRegistrations, updateCachedPackage } from "./src/cache.js";
 
 // Survive extension module re-imports without sharing activation between SDK sessions.
@@ -125,17 +126,25 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     // proxies, not register first and be mistaken for a foreign owner of their names.
     registerCommandProxies();
 
-    // A missing cache is bootstrapped once by eagerly loading that deferred package.
+    // A missing or stale (fingerprint mismatch, e.g. upgraded) cache entry is bootstrapped by eagerly loading that package.
     const bootstrapDiagnostics: string[] = [];
     // Late renames during bootstrap join the single startup warning instead of one toast each.
     loader.collectNotices();
     try {
       for (const pkg of lazyPackages) {
         const cached = cache.packages[pkg.name];
-        if (cached && !cached.tools.some((tool) => tool.requiresEagerLoad)) continue;
+        let current: string | undefined;
+        try {
+          current = packageFingerprint(pkg, loader.getAgentDir());
+        } catch {
+          // Unresolvable package: treat as changed; loadPackage reports the error.
+        }
+        if (cached && current !== undefined && cached.fingerprint === current
+          && !cached.tools.some((tool) => tool.requiresEagerLoad)) continue;
         const loaded = await loader.loadPackage(pkg.name);
         if (!loaded.success) {
-          updateCachedPackage(loader.getAgentDir(), pkg.name, [], []);
+          // Keyed to package identity: retried after the package changes (or while unresolvable), not every startup.
+          updateCachedPackage(loader.getAgentDir(), pkg.name, [], [], current);
           bootstrapDiagnostics.push(`Failed to populate cache for "${pkg.name}": ${loaded.error}`);
         }
       }

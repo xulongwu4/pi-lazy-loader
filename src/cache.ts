@@ -197,6 +197,8 @@ export function schemaIsJsonRepresentable(value: unknown): boolean {
 export interface CachedPackage {
   tools: CachedRegistration[];
   commands: CachedRegistration[];
+  /** Best-effort identity of the package load that produced these registrations (see packageFingerprint). */
+  fingerprint?: string;
 }
 
 export interface LazyLoaderCache {
@@ -259,6 +261,7 @@ export function readCache(agentDir: string): LazyLoaderCache {
       packages[name] = {
         tools: normalizeRegistrations(value.tools),
         commands: normalizeRegistrations(value.commands),
+        ...(typeof value.fingerprint === "string" ? { fingerprint: value.fingerprint } : {}),
       };
     }
     return { version: 2, packages };
@@ -323,7 +326,8 @@ export function updateCachedPackage(
   agentDir: string,
   packageName: string,
   tools: CachedRegistration[],
-  commands: CachedRegistration[]
+  commands: CachedRegistration[],
+  fingerprint?: string
 ): void {
   try {
     withCacheLock(agentDir, () => {
@@ -331,6 +335,7 @@ export function updateCachedPackage(
       cache.packages[packageName] = {
         tools: normalizeRegistrations(tools),
         commands: normalizeRegistrations(commands),
+        ...(typeof fingerprint === "string" ? { fingerprint } : {}),
       };
       writeCacheFile(agentDir, cache);
     });

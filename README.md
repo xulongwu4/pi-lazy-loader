@@ -173,6 +173,17 @@ Changes to `lazy-loader.json` take effect after restarting Pi or issuing `/reloa
 - **Direct tool proxies:** Startup proxies register under every cached tool name for deferred packages. Cache-safe tools (JSON-representable schema, no `prepareArguments`, live schema/options match the cache) load the package and invoke the captured `execute` on the first deferred call. Missing/stale/non-JSON schema, `prepareArguments`, or metadata mismatch return `executed: false` `retryHandoff` and require a new call against the live host schema/options (a new script for codemode). A proxy declaring `outputSchema` marks this handoff `isError: true`, so scripts reject instead of silently treating guidance text as structured output. Surviving stale-cache proxies return terminal `cacheDrift`; failed loads return terminal reload guidance. Command proxies still load and invoke the captured handler on first use.
 - **Sticky Session Failure**: If a package fails to load during a session, subsequent proxy or `/lazy add` calls fail fast without re-entering the load path. Retrying requires `/reload` or session restart.
 
+### Cache Freshness
+
+Proxies are declared from `lazy-loader-cache.json`, so a stale entry would only surface on first use, as a mid-session tool redeclaration that invalidates the prompt cache. Each cache entry therefore stores a best-effort package fingerprint; when it is missing or differs at startup, the package is eagerly re-bootstrapped once (the cost moves to that startup). Detected:
+
+- `package.json` content changes, including a version bump
+- an entry file replaced, touched, or resized (mtime/size)
+- a changed entry list
+- a moved package root (realpath)
+
+Not detected: edits only to non-entry files the entries import, dependency changes, same-version repacks that preserve entry mtime and size, registrations that depend on config or environment, and updates while a session is running (caught at the next startup). For those, delete `lazy-loader-cache.json` or load the package eagerly. A package whose bootstrap fails is retried only after its fingerprint changes.
+
 ---
 
 ## Verification & Checks

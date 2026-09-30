@@ -9,6 +9,7 @@ import {
 import lazyLoaderExtension from "../index.js";
 import { CACHE_FILENAME, readCache } from "../src/cache.js";
 import { registerToolProxies } from "../src/tool-proxy.js";
+import { packageFingerprint } from "../src/resolver.js";
 import { fakePi } from "./fake-pi.js";
 
 const root = mkdtempSync(join(tmpdir(), "pi-lazy-codemode-"));
@@ -252,6 +253,8 @@ export default function(pi) {
         : reason === "prepareLoadout" ? original.replace('name: "probe"', 'prepareLoadout: () => ({}), name: "probe"')
         : original;
       writeFileSync(fixturePath, source);
+      // Simulate drift the startup fingerprint cannot see, so the first-call fallback is exercised.
+      stale.packages.fixture.fingerprint = packageFingerprint(join(agentDir, "fixture"), agentDir);
       writeFileSync(join(agentDir, CACHE_FILENAME), JSON.stringify(stale));
       writeFileSync(join(agentDir, "trace"), "");
       const session = await open(agentDir, mode);

@@ -10,12 +10,11 @@ import { registerToolProxies } from "../src/tool-proxy.js";
 import {
   readCache,
   selectCachedRegistrations,
-  writeCache,
   updateCachedPackage,
   CACHE_FILENAME,
   type LazyLoaderCache,
 } from "../src/cache.js";
-import { fakePi } from "./fake-pi.js";
+import { fakePi, writeFreshCache as writeCache } from "./fake-pi.js";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`Assertion failed: ${message}`);

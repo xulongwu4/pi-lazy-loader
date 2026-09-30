@@ -1,5 +1,5 @@
 import { findPackageDefinition, type PackageDefinition } from "./package.js";
-import { resolvePackageEntries } from "./resolver.js";
+import { packageFingerprint, resolvePackageEntries } from "./resolver.js";
 import { addVisibleCommandName, getAgentDir, importExtensionFactory, replayMissedLifecycle } from "./pi-host.js";
 import { readLazyLoaderConfig } from "./config.js";
 import { updateCachedPackage, type CachedRegistration, cachedToolMetadata, TOOL_METADATA_FIELDS, isCachedToolSchema, schemaIsJsonRepresentable, cloneJsonValue } from "./cache.js";
@@ -28,6 +28,8 @@ export interface PackageState {
   missingTools: string[];
   loadMs?: number;
   loadPromise?: Promise<PackageLoadResult> | null;
+  /** Fingerprint taken before this load imported entries; every cache refresh for the load reuses it. */
+  fingerprint?: string;
 }
 
 export interface PackageLoadResult {
@@ -192,7 +194,8 @@ export class LazyLoader {
         this.agentDir,
         packageName,
         registrations(observedTools),
-        registrations(observedCommands)
+        registrations(observedCommands),
+        this.states.get(packageName)?.fingerprint
       );
     } catch (error: any) {
       console.error(`[pi-lazy-loader] Failed to cache registrations for "${packageName}": ${error?.message ?? error}`);
@@ -487,6 +490,7 @@ export class LazyLoader {
       const t0 = Date.now();
       try {
         const entries = resolvePackageEntries(definition, this.agentDir);
+        pkgState.fingerprint = packageFingerprint(definition, this.agentDir, entries);
         const toolsBefore = new Set((this.pi?.getAllTools?.() ?? []).map((t: any) => t.name));
 
         const stagedRegistrations = new Map<string, any>();
