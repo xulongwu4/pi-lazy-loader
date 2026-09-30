@@ -185,6 +185,17 @@ A package entry may set `"toolExposure": { "<tool name>": "direct" | "codemode" 
 - The same policy is applied to the startup proxy and to every live registration (first load, late registrations, `/reload`), so loading never changes the tool declaration and the prompt cache is preserved. Drift checks compare effective exposures, so an override never causes a retry handoff.
 - The cache keeps the package's own exposure; adding or removing an override needs no re-bootstrap. Changes take effect after `/reload` or a new session.
 
+### Cache Freshness
+
+Proxies are declared from `lazy-loader-cache.json`, so a stale entry would only surface on first use, as a mid-session tool redeclaration that invalidates the prompt cache. Each cache entry therefore stores a best-effort package fingerprint; when it is missing or differs at startup, the package is eagerly re-bootstrapped once (the cost moves to that startup). Detected:
+
+- `package.json` content changes, including a version bump
+- an entry file replaced, touched, or resized (mtime/size)
+- a changed entry list
+- a moved package root (realpath)
+
+Not detected: edits only to non-entry files the entries import, dependency changes, same-version repacks that preserve entry mtime and size, registrations that depend on config or environment, and updates while a session is running (caught at the next startup). For those, delete `lazy-loader-cache.json` or load the package eagerly. A package whose bootstrap fails is retried only after its fingerprint changes.
+
 ---
 
 ## Verification & Checks

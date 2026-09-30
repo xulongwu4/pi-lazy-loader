@@ -75,6 +75,7 @@ If loading fails, staged reserved tools are discarded and the proxies remain. Pa
 - Non-JSON, cyclic, Refine/Codec, and unknown `~` schemas are omitted (fail closed); invalid files read as empty.
 - Cache-safe first deferred call load-then-invokes after live schema/options equivalence. Missing, stale, non-JSON, Refine/Codec, `prepareArguments`, or metadata mismatch returns `executed: false` `retryHandoff`; the model must call the live host tool. Proxy payloads never echo params.
 - Command proxies still load and invoke the captured handler on the in-flight first call.
+- Each package entry carries a best-effort `fingerprint` (package root realpath, `package.json` hash, ordered entry paths with mtime/size), taken when that load resolved its entries and reused by its late refreshes. A missing or mismatched fingerprint re-bootstraps the package at startup; a failed bootstrap stores an empty entry with the fingerprint, so it is retried only after the package changes.
 - Every successful load (and later observed registrations) replaces that package entry. Reads/writes fail soft; updates are lock/rename atomic. Obsolete `lazy-loader-tools.json` is ignored.
 
 ### 7. Fabric Integration

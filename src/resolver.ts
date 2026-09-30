@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { PackageDefinition } from "./package.js";
 import { npmPackageName } from "./package-locator.js";
@@ -150,4 +151,26 @@ export function resolvePackageEntries(sourceOrPackage: string | PackageDefinitio
 
   // Deduplicate entries while preserving order
   return Array.from(new Set(entries));
+}
+
+/**
+ * Best-effort package identity: root realpath, package.json bytes, and ordered entry stats.
+ * Misses edits to non-entry imports and dependencies; pass `entries` to skip re-resolution.
+ */
+export function packageFingerprint(
+  sourceOrPackage: string | PackageDefinition,
+  agentDir?: string,
+  entries = resolvePackageEntries(sourceOrPackage, agentDir)
+): string {
+  const source = typeof sourceOrPackage === "string" ? sourceOrPackage : sourceOrPackage.source;
+  const root = resolvePackageRoot(source, agentDir);
+  const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
+  return sha256(JSON.stringify([
+    realpathSync(root),
+    sha256(readFileSync(join(root, "package.json"))),
+    entries.map((entry) => {
+      const st = statSync(entry);
+      return [entry, st.mtimeMs, st.size];
+    }),
+  ]));
 }

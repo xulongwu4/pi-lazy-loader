@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
 import type { PackageDefinition } from "../src/package.js";
-import { readCache, writeCache } from "../src/cache.js";
+import { readCache } from "../src/cache.js";
+import { writeFreshCache as writeCache } from "./fake-pi.js";
 import { buildCommandDefinitions } from "../src/command-config.js";
 import { LazyLoader } from "../src/loader.js";
 import lazyLoaderExtension from "../index.js";
