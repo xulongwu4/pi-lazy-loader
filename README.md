@@ -208,6 +208,7 @@ bun run check:command  # command forwarding, concurrency, failures
 bun run check:proxy    # command collisions, atomic commits, packaging
 bun run check:v050     # cache, schemas, first-call handoff, late registrations
 bun run check:codemode # native on/only modes, metadata, visibility, structured results
+bun run check:fingerprint # upgrade re-bootstrap; stable prompt prefix after exposure-changing upgrades
 ```
 
 Native codemode checks use the pinned Pi 0.99.1 development dependency and cover cold/warm caches, concurrent first calls, exposure and activation defaults, explicit tool selections, reload/session isolation, CLI-equivalent `--no-tools`, eager-only contracts, metadata drift, structured-output error paths, corrupt policy fields, and v1 cache invalidation.
