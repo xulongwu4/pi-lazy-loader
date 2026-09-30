@@ -194,7 +194,7 @@ Proxies are declared from `lazy-loader-cache.json`, so a stale entry would only 
 - a changed entry list
 - a moved package root (realpath)
 
-Not detected: edits only to non-entry files the entries import, dependency changes, same-version repacks that preserve entry mtime and size, registrations that depend on config or environment, and updates while a session is running (caught at the next startup). For those, delete `lazy-loader-cache.json` or load the package eagerly. A package whose bootstrap fails is not retried until its fingerprint changes. If the cause was transient or environmental, fix it, then run `/reload` (or start a new session) and `/lazy add <pkg>`. The failure only blocks retries for the rest of that session, and a successful load rewrites the cache entry. The package's tools only get proxies from the next startup.
+Not detected: edits only to non-entry files the entries import, dependency changes, same-version repacks that preserve entry mtime and size, registrations that depend on config or environment, and updates while a session is running (caught at the next startup). For those, delete `lazy-loader-cache.json` or load the package eagerly. If a package's bootstrap fails, automatic startup retries are suppressed until its fingerprint changes, but only when the fingerprint was computed successfully; a package whose fingerprint cannot be computed (unresolvable) is retried at every startup. If the cause was transient or environmental, fix it, then run `/reload` (or start a new session) and `/lazy add <pkg>`. The failure only blocks retries for the rest of that session, and a successful load rewrites the cache entry. The package's tools only get proxies from the next startup.
 
 ---
 

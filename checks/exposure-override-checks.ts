@@ -298,23 +298,29 @@ class Priv {
   // Own (not prototype) method, so this isolates the receiver: a copy has no #secret and throws.
   execute = async function(id, p) { return text(this.#secret + ":" + p.value); };
 }
+class Getter {
+  name = "getter"; label = "getter"; description = "getter tool"; parameters = parameters; state = "getter";
+  get lazyResource() { throw new Error("unused getter must not be evaluated"); }
+  get live() { return this.state; }
+  async execute(id, p) { return text(this.live + ":" + p.value); }
+}
 const state = new WeakMap();
 const weak = { name: "weak", label: "weak", description: "weak tool", parameters,
   async execute(id, p) { return text(state.get(this) + ":" + p.value); } };
 state.set(weak, "weak");
 export default function(pi) {
-  const tools = { klass: new Klass(), priv: new Priv(), weak };
+  const tools = { klass: new Klass(), priv: new Priv(), weak, getter: new Getter() };
   globalThis.__lazyReceiverTools = tools;
   for (const tool of Object.values(tools)) pi.registerTool(tool);
 }`);
     writeFileSync(join(agentDir, "lazy-loader.json"), JSON.stringify({
-      packages: [{ source: fixture, toolExposure: { klass: "codemode", priv: "codemode", weak: "codemode" } }],
+      packages: [{ source: fixture, toolExposure: { klass: "codemode", priv: "codemode", weak: "codemode", getter: "codemode" } }],
     }));
     (await open(agentDir, mode)).session.dispose();
     const s = await open(agentDir, mode);
     try {
       await s.say("hi");
-      for (const name of ["klass", "priv", "weak"]) {
+      for (const name of ["klass", "priv", "weak", "getter"]) {
         assert.equal(s.session.getToolDefinition(name)?.exposure, "codemode", `${mode}/${name}: proxy exposure`);
         const out = await s.code(`text(await tools.${name}({value:9}))`);
         assert.match(out, new RegExp(`${name}:9`), `${mode}/${name}: first call must execute with the original receiver`);
@@ -324,6 +330,10 @@ export default function(pi) {
         assert.equal(readCache(agentDir).packages.fixture.tools.find((t) => t.name === name)?.exposure, undefined,
           `${mode}/${name}: cache must keep the raw exposure`);
       }
+      // Getters forward to the original tool: live values, not snapshots.
+      (globalThis as any).__lazyReceiverTools.getter.state = "changed";
+      assert.equal((s.session.getToolDefinition("getter") as any).live, "changed", `${mode}: getter must read live state`);
+      assert.match(await s.code("text(await tools.getter({value:1}))"), /changed:1/, `${mode}: execute sees live state`);
       await s.say("after");
       assertStable(s.requests, `receiver/${mode}`);
     } finally {

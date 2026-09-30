@@ -29,19 +29,25 @@ export function effectiveExposure(definition: PackageDefinition | undefined, too
 /** Same object when the policy leaves the tool unchanged; otherwise a flat view with the effective exposure.
  *  Not a spread: that drops prototype methods (class tools) and rebinds `this`, breaking #private
  *  fields and WeakMap(this) state. Not a mutation: the cache must keep the raw object, and packages
- *  may reuse one tool object across /reload. So copy own + inherited props, binding methods to the original. */
+ *  may reuse one tool object across /reload. So copy own + inherited property descriptors: data values
+ *  (methods bound to the original) and forwarding accessors that run on the original, never evaluated here. */
 export function withEffectiveExposure<T extends { name: string; exposure?: unknown }>(definition: PackageDefinition | undefined, tool: T): T {
   const exposure = effectiveExposure(definition, tool.name, tool.exposure);
   if (exposure === tool.exposure) return tool;
-  const view: Record<string, unknown> = {};
+  const view = {};
+  const bind = (value: unknown) => typeof value === "function" ? value.bind(tool) : value;
   for (let o: object | null = tool; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
     for (const key of Object.getOwnPropertyNames(o)) {
       if (key === "constructor" || Object.hasOwn(view, key)) continue;
-      const value = (tool as any)[key];
-      view[key] = typeof value === "function" ? value.bind(tool) : value;
+      const d = Object.getOwnPropertyDescriptor(o, key)!;
+      const { get, set } = d;
+      Object.defineProperty(view, key, "value" in d
+        ? { enumerable: true, configurable: true, writable: true, value: bind(d.value) }
+        : { enumerable: true, configurable: true, get: get && (() => bind(get.call(tool))), set: set && ((v: unknown) => set.call(tool, v)) });
     }
   }
-  return { ...view, exposure } as T;
+  Object.defineProperty(view, "exposure", { enumerable: true, configurable: true, writable: true, value: exposure });
+  return view as T;
 }
 
 export function findPackageDefinition(
