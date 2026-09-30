@@ -182,7 +182,7 @@ A package entry may set `"toolExposure": { "<tool name>": "direct" | "codemode" 
 ```
 
 - The override applies only when the package registers the tool as `direct` (or without an exposure), `codemode`, or `deferred`. A tool the package registers as `hidden` or `model-only` is never promoted.
-- The same policy is applied to the startup proxy and to every live registration (first load, late registrations, `/reload`), so loading never changes the tool declaration and the prompt cache is preserved. Drift checks compare effective exposures, so an override never causes a retry handoff.
+- The same policy is applied to the startup proxy and to every live registration (first load, late registrations, `/reload`), so for cache-safe registrations an override never makes the loaded tool's exposure differ from the proxy's, and the prompt cache is preserved. Drift checks compare effective exposures, so an override never causes a retry handoff. Loading can still change a declaration for other reasons: retry-handoff proxies (unsafe schema or `prepareArguments`) and metadata drift the fingerprint does not detect.
 - The cache keeps the package's own exposure; adding or removing an override needs no re-bootstrap. Changes take effect after `/reload` or a new session.
 
 ### Cache Freshness
@@ -194,7 +194,7 @@ Proxies are declared from `lazy-loader-cache.json`, so a stale entry would only 
 - a changed entry list
 - a moved package root (realpath)
 
-Not detected: edits only to non-entry files the entries import, dependency changes, same-version repacks that preserve entry mtime and size, registrations that depend on config or environment, and updates while a session is running (caught at the next startup). For those, delete `lazy-loader-cache.json` or load the package eagerly. A package whose bootstrap fails is retried only after its fingerprint changes.
+Not detected: edits only to non-entry files the entries import, dependency changes, same-version repacks that preserve entry mtime and size, registrations that depend on config or environment, and updates while a session is running (caught at the next startup). For those, delete `lazy-loader-cache.json` or load the package eagerly. A package whose bootstrap fails is not retried until its fingerprint changes. If the cause was transient or environmental, fix it, then run `/reload` (or start a new session) and `/lazy add <pkg>`. The failure only blocks retries for the rest of that session, and a successful load rewrites the cache entry. The package's tools only get proxies from the next startup.
 
 ---
 

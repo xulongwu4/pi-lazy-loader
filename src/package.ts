@@ -26,10 +26,22 @@ export function effectiveExposure(definition: PackageDefinition | undefined, too
   return ["direct", "codemode", "deferred"].includes((liveExposure ?? "direct") as string) ? overrides[toolName] : liveExposure;
 }
 
-/** Same object when the policy leaves the tool unchanged; otherwise a copy with the effective exposure. */
+/** Same object when the policy leaves the tool unchanged; otherwise a flat view with the effective exposure.
+ *  Not a spread: that drops prototype methods (class tools) and rebinds `this`, breaking #private
+ *  fields and WeakMap(this) state. Not a mutation: the cache must keep the raw object, and packages
+ *  may reuse one tool object across /reload. So copy own + inherited props, binding methods to the original. */
 export function withEffectiveExposure<T extends { name: string; exposure?: unknown }>(definition: PackageDefinition | undefined, tool: T): T {
   const exposure = effectiveExposure(definition, tool.name, tool.exposure);
-  return exposure === tool.exposure ? tool : { ...tool, exposure };
+  if (exposure === tool.exposure) return tool;
+  const view: Record<string, unknown> = {};
+  for (let o: object | null = tool; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) {
+    for (const key of Object.getOwnPropertyNames(o)) {
+      if (key === "constructor" || Object.hasOwn(view, key)) continue;
+      const value = (tool as any)[key];
+      view[key] = typeof value === "function" ? value.bind(tool) : value;
+    }
+  }
+  return { ...view, exposure } as T;
 }
 
 export function findPackageDefinition(

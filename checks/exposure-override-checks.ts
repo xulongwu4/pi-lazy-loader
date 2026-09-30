@@ -279,6 +279,59 @@ try {
   }
   console.log("PASS /reload keeps override parity");
 
+  // (6) Overridden tools keep their receiver: prototype methods, #private fields, WeakMap(this) state.
+  for (const mode of ["on", "only"] as const) {
+    const agentDir = join(root, `receiver-${mode}`);
+    const fixture = join(agentDir, "fixture");
+    mkdirSync(fixture, { recursive: true });
+    writeFileSync(join(fixture, "package.json"), JSON.stringify({ name: "fixture", type: "module", pi: { extensions: ["index.ts"] } }));
+    writeFileSync(join(fixture, "index.ts"), `
+const parameters = { type: "object", properties: { value: { type: "number" } }, required: ["value"] };
+const text = (s) => ({ content: [{ type: "text", text: s }], details: {} });
+class Klass {
+  name = "klass"; label = "klass"; description = "klass tool"; parameters = parameters; prefix = "klass";
+  async execute(id, p) { return text(this.prefix + ":" + p.value); }
+}
+class Priv {
+  #secret = "priv";
+  name = "priv"; label = "priv"; description = "priv tool"; parameters = parameters;
+  // Own (not prototype) method, so this isolates the receiver: a copy has no #secret and throws.
+  execute = async function(id, p) { return text(this.#secret + ":" + p.value); };
+}
+const state = new WeakMap();
+const weak = { name: "weak", label: "weak", description: "weak tool", parameters,
+  async execute(id, p) { return text(state.get(this) + ":" + p.value); } };
+state.set(weak, "weak");
+export default function(pi) {
+  const tools = { klass: new Klass(), priv: new Priv(), weak };
+  globalThis.__lazyReceiverTools = tools;
+  for (const tool of Object.values(tools)) pi.registerTool(tool);
+}`);
+    writeFileSync(join(agentDir, "lazy-loader.json"), JSON.stringify({
+      packages: [{ source: fixture, toolExposure: { klass: "codemode", priv: "codemode", weak: "codemode" } }],
+    }));
+    (await open(agentDir, mode)).session.dispose();
+    const s = await open(agentDir, mode);
+    try {
+      await s.say("hi");
+      for (const name of ["klass", "priv", "weak"]) {
+        assert.equal(s.session.getToolDefinition(name)?.exposure, "codemode", `${mode}/${name}: proxy exposure`);
+        const out = await s.code(`text(await tools.${name}({value:9}))`);
+        assert.match(out, new RegExp(`${name}:9`), `${mode}/${name}: first call must execute with the original receiver`);
+        assert.equal(s.session.getToolDefinition(name)?.exposure, "codemode", `${mode}/${name}: live exposure`);
+        const original = (globalThis as any).__lazyReceiverTools[name];
+        assert.equal(Object.hasOwn(original, "exposure"), false, `${mode}/${name}: original tool must not be mutated`);
+        assert.equal(readCache(agentDir).packages.fixture.tools.find((t) => t.name === name)?.exposure, undefined,
+          `${mode}/${name}: cache must keep the raw exposure`);
+      }
+      await s.say("after");
+      assertStable(s.requests, `receiver/${mode}`);
+    } finally {
+      s.session.dispose();
+    }
+  }
+  console.log("PASS overridden tools keep prototype methods and their receiver");
+
   console.log("PASS exposure-override-checks");
 } finally {
   if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
