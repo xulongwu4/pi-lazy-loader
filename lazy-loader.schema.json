@@ -27,6 +27,12 @@
                 "type": "array",
                 "uniqueItems": true,
                 "items": { "type": "string", "minLength": 1 }
+              },
+              "toolExposure": {
+                "description": "Per-tool exposure override by exact tool name. Applies to direct/codemode/deferred tools only; hidden and model-only tools are never promoted.",
+                "type": "object",
+                "propertyNames": { "minLength": 1 },
+                "additionalProperties": { "enum": ["direct", "codemode", "deferred", "hidden"] }
               }
             }
           }

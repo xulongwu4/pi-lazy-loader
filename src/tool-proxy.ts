@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 
-import type { PackageDefinition } from "./package.js";
+import { withEffectiveExposure, type PackageDefinition } from "./package.js";
 import { isExecutableCapture, type LazyLoader, type PackageLoadResult } from "./loader.js";
 import { cachedToolMetadata, TOOL_METADATA_FIELDS, isCachedToolSchema, schemaIsJsonRepresentable, schemasEquivalent, selectCachedRegistrations, type CachedRegistration, type LazyLoaderCache } from "./cache.js";
 
@@ -109,7 +109,9 @@ export function registerToolProxies(
       cache.packages[entry.name]?.tools ?? [],
       entry.proxyTools
     );
-    for (const declaration of cachedTools) {
+    for (const cached of cachedTools) {
+      // Effective-vs-effective: a permitted override never looks like cache drift.
+      const declaration = withEffectiveExposure(entry, cached);
       if (occupied.has(declaration.name)) {
         const diagnostic = `Tool proxy "${declaration.name}" for "${entry.name}" was skipped because that name is already registered`;
         diagnostics.push(diagnostic);

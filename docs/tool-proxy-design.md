@@ -19,6 +19,7 @@ Startup proxies register under cached tool names for deferred packages (honor `l
 - **Description:** Cache-safe proxies preserve the cached description verbatim (including whitespace and empty strings), without loading notes, to avoid declaration churn on first load. Load-only proxies keep retry guidance and the package-name fallback.
 - **Parameters:** Cached JSON-safe `parameters` when `isCachedToolSchema`; otherwise `Type.Object({}, { additionalProperties: true })`. Cached `executionMode` / `constrainedSampling` are copied onto the proxy.
 - **Privacy:** Proxy payloads never echo caller params.
+- **Exposure overrides:** A package's `toolExposure` override is applied (via `effectiveExposure` in `src/package.ts`) to the cached declaration before the proxy is built and to every live registration in the loader's wrapped `registerTool` (after the raw registration is recorded for the cache). Only `direct`/`codemode`/`deferred` (or unset) exposures are overridden; `hidden` and `model-only` always win. Invoke-safety compares effective with effective exposure, so a permitted override never forces a handoff and the real tool keeps the proxy's declaration.
 
 ### 2. Proxy Invocation
 

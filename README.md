@@ -173,6 +173,18 @@ Changes to `lazy-loader.json` take effect after restarting Pi or issuing `/reloa
 - **Direct tool proxies:** Startup proxies register under every cached tool name for deferred packages. Cache-safe tools (JSON-representable schema, no `prepareArguments`, live schema/options match the cache) load the package and invoke the captured `execute` on the first deferred call. Missing/stale/non-JSON schema, `prepareArguments`, or metadata mismatch return `executed: false` `retryHandoff` and require a new call against the live host schema/options (a new script for codemode). A proxy declaring `outputSchema` marks this handoff `isError: true`, so scripts reject instead of silently treating guidance text as structured output. Surviving stale-cache proxies return terminal `cacheDrift`; failed loads return terminal reload guidance. Command proxies still load and invoke the captured handler on first use.
 - **Sticky Session Failure**: If a package fails to load during a session, subsequent proxy or `/lazy add` calls fail fast without re-entering the load path. Retrying requires `/reload` or session restart.
 
+### Tool Exposure Overrides
+
+A package entry may set `"toolExposure": { "<tool name>": "direct" | "codemode" | "deferred" | "hidden" }` (catalog object form, or inside the inline `"lazy": {...}` options). Names are exact; there are no globs.
+
+```json
+{ "source": "npm:pi-web-access", "extensions": [], "lazy": { "toolExposure": { "web_search": "codemode", "fetch_content": "hidden" } } }
+```
+
+- The override applies only when the package registers the tool as `direct` (or without an exposure), `codemode`, or `deferred`. A tool the package registers as `hidden` or `model-only` is never promoted.
+- The same policy is applied to the startup proxy and to every live registration (first load, late registrations, `/reload`), so loading never changes the tool declaration and the prompt cache is preserved. Drift checks compare effective exposures, so an override never causes a retry handoff.
+- The cache keeps the package's own exposure; adding or removing an override needs no re-bootstrap. Changes take effect after `/reload` or a new session.
+
 ---
 
 ## Verification & Checks

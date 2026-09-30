@@ -5,6 +5,9 @@ export interface CommandProxyDeclaration {
   hasArgumentCompletions?: boolean;
 }
 
+export const TOOL_EXPOSURE_OVERRIDES = ["direct", "codemode", "deferred", "hidden"] as const;
+export type ToolExposureOverride = typeof TOOL_EXPOSURE_OVERRIDES[number];
+
 export interface PackageDefinition {
   name: string;
   source: string;
@@ -12,6 +15,21 @@ export interface PackageDefinition {
   commands?: CommandProxyDeclaration[];
   proxyCommands?: string[];
   proxyTools?: string[];
+  toolExposure?: Record<string, ToolExposureOverride>;
+}
+
+/** Configured exposure for a tool. Only direct/codemode/deferred (undefined = Pi's direct) are
+ *  overridable; hidden, model-only and unknown values always win, so an override never promotes. */
+export function effectiveExposure(definition: PackageDefinition | undefined, toolName: string, liveExposure: unknown): unknown {
+  const overrides = definition?.toolExposure;
+  if (!overrides || !Object.hasOwn(overrides, toolName)) return liveExposure;
+  return ["direct", "codemode", "deferred"].includes((liveExposure ?? "direct") as string) ? overrides[toolName] : liveExposure;
+}
+
+/** Same object when the policy leaves the tool unchanged; otherwise a copy with the effective exposure. */
+export function withEffectiveExposure<T extends { name: string; exposure?: unknown }>(definition: PackageDefinition | undefined, tool: T): T {
+  const exposure = effectiveExposure(definition, tool.name, tool.exposure);
+  return exposure === tool.exposure ? tool : { ...tool, exposure };
 }
 
 export function findPackageDefinition(

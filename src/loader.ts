@@ -1,4 +1,4 @@
-import { findPackageDefinition, type PackageDefinition } from "./package.js";
+import { findPackageDefinition, withEffectiveExposure, type PackageDefinition } from "./package.js";
 import { resolvePackageEntries } from "./resolver.js";
 import { addVisibleCommandName, getAgentDir, importExtensionFactory, replayMissedLifecycle } from "./pi-host.js";
 import { readLazyLoaderConfig } from "./config.js";
@@ -604,6 +604,8 @@ export class LazyLoader {
             if (tool && typeof tool.name === "string") {
               observedTools?.set(tool.name, tool);
               refreshIfLoaded();
+              // The cache keeps the raw registration; every live path gets the configured exposure.
+              tool = withEffectiveExposure(this.states.get(packageName)?.definition, tool);
               if (this.protectedTools.get(packageName)?.has(tool.name)) return;
               if (this.reservedTools.get(packageName)?.has(tool.name)) {
                 dispatchReservedStatus(
