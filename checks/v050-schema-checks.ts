@@ -502,7 +502,7 @@ console.log("--- Check 14b: hasPrepareArguments Gates First-Call Invoke ---");
   }
 }
 
-console.log("--- Check 14e: Call Aborted While Loading Does Not Execute ---");
+console.log("--- Check 14g: Call Aborted While Loading Does Not Execute ---");
 {
   const root = join(tmpdir(), `pi-lazy-v050-chk14d-${Date.now()}`);
   mkdirSync(root, { recursive: true });
