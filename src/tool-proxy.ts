@@ -4,16 +4,6 @@ import { withEffectiveExposure, type PackageDefinition } from "./package.js";
 import { isExecutableCapture, type LazyLoader, type PackageLoadResult } from "./loader.js";
 import { cachedToolMetadata, TOOL_METADATA_FIELDS, isCachedToolSchema, schemaIsJsonRepresentable, schemasEquivalent, selectCachedRegistrations, type CachedRegistration, type LazyLoaderCache } from "./cache.js";
 
-export function formatProxyGuidance(packageName: string, toolName: string): string {
-  return `This deferred proxy loads package "${packageName}" without executing "${toolName}". After loading completes, call "${toolName}" again using its loaded schema.`;
-}
-
-export function formatProxyDescription(baseDescription: string, packageName: string, toolName: string): string {
-  const cleanBase = baseDescription.trim().replace(/\.+$/, "");
-  return `${cleanBase}. ${formatProxyGuidance(packageName, toolName)}`;
-}
-
-
 function cacheDrift(packageName: string, toolName: string) {
   return {
     content: [{
@@ -121,19 +111,14 @@ export function registerToolProxies(
       }
 
       loader.reserveTool(entry.name, declaration.name);
-      const baseDesc = declaration.description?.trim() || `Tools provided by ${entry.name}`;
-      const schema = declaration.parameters;
-      const canInvoke = cachedInvokeIsSafe(declaration);
-      const description = canInvoke
-        ? declaration.description ?? ""
-        : formatProxyDescription(baseDesc, entry.name, declaration.name);
-
+      // Verbatim declarations keep Pi's tool deltas cache-safe when the real tool replaces the proxy.
+      const cacheable = isCachedToolSchema(declaration.parameters);
       const proxyTool: any = {
         ...cachedToolMetadata(declaration),
         name: declaration.name,
         label: declaration.name,
-        description,
-        parameters: canInvoke ? schema : Type.Object({}, { additionalProperties: true }),
+        description: declaration.description ?? (cacheable ? "" : `Tools provided by ${entry.name}`),
+        parameters: cacheable ? declaration.parameters : Type.Object({}, { additionalProperties: true }),
         async execute(toolCallId: string, params: any, signal: AbortSignal, onUpdate: any, ctx: any) {
           const state = loader.getPackageState(entry.name);
           if (state?.status === "failed") {

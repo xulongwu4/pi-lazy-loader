@@ -6,11 +6,7 @@ import { Type } from "typebox";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 
 import { CacheDriftError, LazyLoader } from "../src/loader.js";
-import {
-  registerToolProxies,
-  formatProxyGuidance,
-  formatProxyDescription,
-} from "../src/tool-proxy.js";
+import { registerToolProxies } from "../src/tool-proxy.js";
 import {
   readCache,
   CACHE_FILENAME,
@@ -59,6 +55,9 @@ function entry(name: string) {
 }
 
 const objectSchema = { type: "object", properties: {}, additionalProperties: true };
+// Non-cacheable schemas keep Type.Object({}, { additionalProperties: true }).
+const isLooseParams = (params: any) => params?.type === "object" && params.additionalProperties === true
+  && Object.keys(params.properties ?? {}).length === 0 && params.required === undefined;
 const webCache: LazyLoaderCache = {
   version: 2,
   packages: {
@@ -138,7 +137,7 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
     const noSchemaCache: LazyLoaderCache = {
       version: 2,
       packages: {
-        "pi-web-access": { tools: [{ name: "web_search" }], commands: [] },
+        "pi-web-access": { tools: [{ name: "web_search", description: " Search the web... " }], commands: [] },
       },
     };
 
@@ -146,7 +145,8 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
     const retryLoader = new LazyLoader(retryPi as any, root, [entry("pi-web-access")]);
     registerToolProxies(retryPi, retryLoader, [entry("pi-web-access")], noSchemaCache);
     const retryProxy = retryPi.tools.get("web_search");
-    assert(retryProxy.description.includes(formatProxyGuidance("pi-web-access", "web_search")), "no-schema proxy must ask the model to retry");
+    assert(retryProxy.description === " Search the web... ", "no-schema proxy must keep the cached description verbatim");
+    assert(isLooseParams(retryProxy.parameters), "no-schema proxy must keep loose parameters");
     const retryResult = await retryProxy.execute("retry-1", { q: "nope" });
     assert(retryResult.details.executed === false && retryResult.details.retryTool === "web_search", "no-schema proxy must not execute");
     assert((globalThis as any).__v050Chk10Exec === 0, "no-schema first call must not invoke the real tool");
@@ -161,7 +161,6 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
       "proxy must register with the cached parameter schema"
     );
     assert(searchProxy.description === "Real web search", "schema proxy must preserve the original description without loading notes");
-    assert(formatProxyDescription("Search", "pi-web-access", "web_search").includes(formatProxyGuidance("pi-web-access", "web_search")), "retry description helper must keep the handoff note");
 
     const signal = AbortSignal.abort();
     const onUpdate = () => {};
@@ -416,11 +415,18 @@ console.log("--- Check 14: Invalid Cached Schema Falls Back To Retry Handoff ---
     registerToolProxies(pi, loader, [entry("pi-web-access")], {
       version: 2,
       packages: {
-        "pi-web-access": { tools: [{ name: "web_search", parameters: [] }], commands: [] },
+        "pi-web-access": { tools: [{ name: "web_search", description: "", parameters: [] }], commands: [] },
       },
     });
     const proxy = pi.tools.get("web_search");
-    assert(proxy.description.includes(formatProxyGuidance("pi-web-access", "web_search")), "array schema must use retry guidance");
+    assert(proxy.description === "", "cached empty description without a schema must stay verbatim");
+    assert(isLooseParams(proxy.parameters), "array schema proxy must keep loose parameters");
+    const allowPi = fakePi();
+    const allowEntry = { ...entry("pi-web-access"), proxyTools: ["uncached_tool"] };
+    registerToolProxies(allowPi, new LazyLoader(allowPi as any, root, [allowEntry]), [allowEntry], webCache);
+    const uncached = allowPi.tools.get("uncached_tool");
+    assert(uncached?.description === "Tools provided by pi-web-access", "allowlisted uncached tool must use the package fallback description");
+    assert(isLooseParams(uncached.parameters), "allowlisted uncached tool must keep loose parameters");
     const result = await proxy.execute("array-schema", { q: "nope" });
     assert(result.details.executed === false && result.details.retryTool === "web_search", "array schema must not invoke");
     assert((globalThis as any).__v050Chk14Exec === 0, "invalid cached schema must not forward unvalidated params");
@@ -470,7 +476,7 @@ console.log("--- Check 14b: hasPrepareArguments Gates First-Call Invoke ---");
       packages: {
         "pi-web-access": {
           tools: [
-            { name: "prepare_tool", parameters: objectSchema, hasPrepareArguments: true },
+            { name: "prepare_tool", description: "Prepare tool.", parameters: objectSchema, hasPrepareArguments: true },
             { name: "plain_tool", parameters: objectSchema, hasPrepareArguments: false },
           ],
           commands: [],
@@ -479,7 +485,8 @@ console.log("--- Check 14b: hasPrepareArguments Gates First-Call Invoke ---");
     });
     const prepareProxy = pi.tools.get("prepare_tool");
     const plainProxy = pi.tools.get("plain_tool");
-    assert(prepareProxy.description.includes(formatProxyGuidance("pi-web-access", "prepare_tool")), "hasPrepareArguments true must use retry guidance");
+    assert(prepareProxy.description === "Prepare tool.", "hasPrepareArguments true must keep the cached description verbatim");
+    assert(JSON.stringify(prepareProxy.parameters) === JSON.stringify(objectSchema), "hasPrepareArguments true must declare cacheable parameters verbatim");
     assert(plainProxy.description === "", "hasPrepareArguments false must preserve the empty description without loading notes");
     const prepareResult = await prepareProxy.execute("prep", {});
     assert(prepareResult.details.executed === false && prepareResult.details.retryTool === "prepare_tool", "hasPrepareArguments true must not first-call invoke");
@@ -495,7 +502,7 @@ console.log("--- Check 14b: hasPrepareArguments Gates First-Call Invoke ---");
   }
 }
 
-console.log("--- Check 14c: Unsafe Cached Schema Uses Permissive Host Validation ---");
+console.log("--- Check 14c: hasPrepareArguments Proxy Declares Cached Schema Verbatim ---");
 {
   const root = join(tmpdir(), `pi-lazy-v050-chk14c-${Date.now()}`);
   mkdirSync(root, { recursive: true });
@@ -525,21 +532,28 @@ console.log("--- Check 14c: Unsafe Cached Schema Uses Permissive Host Validation
       version: 2,
       packages: {
         "pi-web-access": {
-          tools: [{ name: "prepare_tool", parameters: strictSchema, hasPrepareArguments: true }],
+          tools: [{ name: "prepare_tool", description: "Prepare\n", parameters: strictSchema, hasPrepareArguments: true }],
           commands: [],
         },
       },
     });
     const proxy = pi.tools.get("prepare_tool");
-    assert(proxy.description.includes(formatProxyGuidance("pi-web-access", "prepare_tool")), "unsafe schema must use retry guidance");
-    const shim = { n: "1" };
-    validateToolArguments(proxy, { type: "toolCall", id: "shim", name: "prepare_tool", arguments: { ...shim } });
-    validateToolArguments(proxy, { type: "toolCall", id: "missing", name: "prepare_tool", arguments: {} });
-    const result = await proxy.execute("prep-shim", shim);
-    assert(result.details.executed === false && result.details.retryTool === "prepare_tool", "shim input must reach execute and retry");
+    assert(proxy.description === "Prepare\n", "hasPrepareArguments proxy must keep the cached description verbatim");
+    assert(JSON.stringify(proxy.parameters) === JSON.stringify(strictSchema), "hasPrepareArguments proxy must declare the cached schema verbatim");
+    // Accepted limitation: args only prepareArguments would fix now fail host validation before load.
+    let rejected = false;
+    try {
+      validateToolArguments(proxy, { type: "toolCall", id: "missing", name: "prepare_tool", arguments: {} });
+    } catch {
+      rejected = true;
+    }
+    assert(rejected, "verbatim cached schema must validate like the real tool");
+    const valid = { n: 4242 };
+    const result = await proxy.execute("prep-valid", validateToolArguments(proxy, { type: "toolCall", id: "valid", name: "prepare_tool", arguments: { ...valid } }));
+    assert(result.details.executed === false && result.details.retryTool === "prepare_tool", "hasPrepareArguments first call must load then retry");
     assert((globalThis as any).__v050Chk14cExec === 0, "hasPrepareArguments true must not run execute");
-    assertNoCallerEcho(result, shim, "prepareArguments retry");
-    console.log("  ✓ Unsafe first-call schema is permissive so host validation cannot block retry");
+    assertNoCallerEcho(result, valid, "prepareArguments retry");
+    console.log("  ✓ hasPrepareArguments proxy is verbatim but still first-call-unsafe");
   } finally {
     delete (globalThis as any).__v050Chk14cExec;
     rmSync(root, { recursive: true, force: true });
