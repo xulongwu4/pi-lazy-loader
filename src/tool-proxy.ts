@@ -135,6 +135,14 @@ export function registerToolProxies(
               return loadFailure(entry.name, declaration.name, loaded.error);
             }
           }
+          // Loading can take a while; a call aborted meanwhile must not run (the package stays loaded).
+          if (signal?.aborted) {
+            return {
+              content: [{ type: "text", text: "Operation aborted" }],
+              details: { ok: false, executed: false, package: entry.name, tool: declaration.name, aborted: true },
+              isError: true,
+            };
+          }
 
           const captured = loader.getCapturedTool(entry.name, declaration.name);
           if (!isExecutableCapture("tool", captured)) return cacheDrift(entry.name, declaration.name);

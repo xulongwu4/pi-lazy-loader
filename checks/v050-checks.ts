@@ -144,7 +144,7 @@ console.log("--- Check 2: Proxy Loads Package Then Invokes the Real Tool ---");
     assert(proxy, "web_search proxy must be registered");
 
     const callerArgs = { query: "quantum computing" };
-    const signal = AbortSignal.abort();
+    const signal = new AbortController().signal;
     const onUpdate = () => {};
     const ctx = { cwd: "/fixture" };
     const result = await proxy.execute("call-1", callerArgs, signal, onUpdate, ctx);

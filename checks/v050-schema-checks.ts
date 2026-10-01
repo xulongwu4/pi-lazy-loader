@@ -162,7 +162,7 @@ console.log("--- Check 10: Cached Schemas, No-Schema Retry, Typed Cache Drift --
     );
     assert(searchProxy.description === "Real web search", "schema proxy must preserve the original description without loading notes");
 
-    const signal = AbortSignal.abort();
+    const signal = new AbortController().signal;
     const onUpdate = () => {};
     const ctx = { cwd: "/fwd" };
     const ran = await searchProxy.execute("call-ok", { q: "hi" }, signal, onUpdate, ctx);
@@ -498,6 +498,46 @@ console.log("--- Check 14b: hasPrepareArguments Gates First-Call Invoke ---");
   } finally {
     delete (globalThis as any).__v050Chk14bPrepare;
     delete (globalThis as any).__v050Chk14bPlain;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+console.log("--- Check 14e: Call Aborted While Loading Does Not Execute ---");
+{
+  const root = join(tmpdir(), `pi-lazy-v050-chk14d-${Date.now()}`);
+  mkdirSync(root, { recursive: true });
+  try {
+    fixture(root, "pi-web-access", `
+      export default function (pi) {
+        pi.registerTool({
+          name: "plain_tool",
+          parameters: { type: "object", properties: {}, additionalProperties: true },
+          execute() {
+            globalThis.__v050Chk14dExec = (globalThis.__v050Chk14dExec || 0) + 1;
+            return { content: [{ type: "text", text: "plain" }], details: { from: "real" } };
+          }
+        });
+      }
+    `);
+    (globalThis as any).__v050Chk14dExec = 0;
+    const pi = fakePi();
+    const loader = new LazyLoader(pi as any, root, [entry("pi-web-access")]);
+    registerToolProxies(pi, loader, [entry("pi-web-access")], {
+      version: 2,
+      packages: { "pi-web-access": { tools: [{ name: "plain_tool", parameters: objectSchema }], commands: [] } },
+    });
+    const proxy = pi.tools.get("plain_tool");
+    const controller = new AbortController();
+    // The proxy reports "Loading…" just before it awaits the load; abort there.
+    const result = await proxy.execute("abort", {}, controller.signal, () => controller.abort(), {});
+    assert(result.isError === true && result.details.aborted === true && result.details.executed === false, "aborted call must return an aborted error");
+    assert((globalThis as any).__v050Chk14dExec === 0, "aborted call must not run execute");
+    assert(loader.getPackageState("pi-web-access")?.status === "loaded" && pi.tools.get("plain_tool") !== proxy, "the package still loads and replaces the proxy");
+    const again = await proxy.execute("again", {}, new AbortController().signal, () => {}, {});
+    assert(again.details.from === "real" && (globalThis as any).__v050Chk14dExec === 1, "a later unaborted call runs");
+    console.log("  ✓ abort during load returns an aborted error without executing");
+  } finally {
+    delete (globalThis as any).__v050Chk14dExec;
     rmSync(root, { recursive: true, force: true });
   }
 }
