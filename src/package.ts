@@ -15,6 +15,7 @@ export interface PackageDefinition {
   commands?: CommandProxyDeclaration[];
   proxyCommands?: string[];
   proxyTools?: string[];
+  loadOnToolCall?: string[];
   toolExposure?: Record<string, ToolExposureOverride>;
 }
 

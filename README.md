@@ -76,6 +76,14 @@ Catalog form (options 2 and 3):
 - Explicit names absent from the cache still receive proxies, allowing conditional registrations to be requested.
 - `lazy-loader.schema.json` describes this format for editor validation.
 
+A per-package `loadOnToolCall` array loads and awaits that package before any tool with an exact matching name runs, even if another package owns the tool. For example, let pi-tasks' `TaskExecute` wake pi-subagents:
+
+```json
+{ "source": "npm:@tintinweb/pi-subagents", "extensions": [], "lazy": { "loadOnToolCall": ["TaskExecute"] } }
+```
+
+In either catalog form, put `"loadOnToolCall": ["TaskExecute"]` beside `"source"` instead. Omitted or empty arrays add no trigger; load failures are logged without blocking the tool.
+
 Native Pi codemode needs no additional gateway extension. Enable it in `settings.json`:
 
 ```json

@@ -65,6 +65,28 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   const lazyPackages = configured.packages;
   const loader = new LazyLoader(pi, agentDir, lazyPackages);
 
+  const loadOnToolCall = new Map<string, string[]>();
+  for (const pkg of lazyPackages) {
+    for (const toolName of pkg.loadOnToolCall ?? []) {
+      loadOnToolCall.set(toolName, [...(loadOnToolCall.get(toolName) ?? []), pkg.name]);
+    }
+  }
+  if (loadOnToolCall.size > 0) {
+    pi.on("tool_call", async (e) => {
+      // Await dependencies before execution, but never let a loading error block the calling tool.
+      try {
+        await Promise.all((loadOnToolCall.get(e.toolName) ?? []).map(async (name) => {
+          const status = loader.getPackageState(name)?.status;
+          if (status === "loaded" || status === "failed") return;
+          const result = await loader.loadPackage(name);
+          if (!result.success) console.error(`[pi-lazy-loader] Failed to load "${name}" on tool call "${e.toolName}": ${result.error}`);
+        }));
+      } catch (error) {
+        console.error(`[pi-lazy-loader] Failed to load dependencies on tool call "${e.toolName}":`, error);
+      }
+    });
+  }
+
   let cache = readCache(loader.getAgentDir());
   const cachedPackages = lazyPackages.map((pkg) => ({
     ...pkg,
