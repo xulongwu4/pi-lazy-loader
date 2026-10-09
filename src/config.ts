@@ -16,7 +16,7 @@ function proxyNames(value: unknown, field: string, source: string): string[] {
   if (!Array.isArray(value)) throw new Error(`"${field}" for "${source}" must be an array`);
   const names = value.map((name) => {
     if (typeof name !== "string" || !name.trim() || /[\x00-\x1f\x7f]/.test(name)) {
-      throw new Error(`"${field}" for "${source}" contains an invalid proxy name`);
+      throw new Error(`"${field}" for "${source}" contains an invalid name`);
     }
     return name.trim();
   });

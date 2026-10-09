@@ -40,7 +40,7 @@ pi install git:github.com/xulongwu4/pi-lazy-loader@v0.15.0
 
 Declare lazy packages in one of three places, checked in this order (first match wins, never merged):
 
-1. **Inline in `settings.json` `packages`** — add `"lazy"` to an object entry. `"lazy": true` defers with all cached proxies; `"lazy": {tools, commands}` carries the same allowlists as the catalog object form. Pair with `"extensions": []` so Pi installs the package but does not load its extension code eagerly.
+1. **Inline in `settings.json` `packages`** — add `"lazy"` to an object entry. `"lazy": true` defers with all cached proxies; the inline `"lazy"` object accepts the same fields as the catalog object form (`tools`, `commands`, `loadOnToolCall`, `toolExposure`). Pair with `"extensions": []` so Pi installs the package but does not load its extension code eagerly.
 2. **`"lazy-loader"` key in `settings.json`** — a `{ "packages": [...] }` block, same entry shape as below.
 3. **`lazy-loader.json`** in `${PI_CODING_AGENT_DIR:-~/.pi/agent}` — the standalone fallback.
 

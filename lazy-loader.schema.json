@@ -29,6 +29,7 @@
                 "items": { "type": "string", "minLength": 1 }
               },
               "loadOnToolCall": {
+                "description": "Tool names (exact match) that load and await this package before they execute.",
                 "type": "array",
                 "uniqueItems": true,
                 "items": { "type": "string", "minLength": 1 }

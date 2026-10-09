@@ -58,7 +58,10 @@ try {
   }
   const schema = JSON.parse(readFileSync(new URL("../lazy-loader.schema.json", import.meta.url), "utf-8"));
   const properties = schema.properties.packages.items.oneOf[1].properties;
-  assert.deepEqual(properties.loadOnToolCall, properties.tools);
+  assert.deepEqual(properties.loadOnToolCall, {
+    ...properties.tools,
+    description: "Tool names (exact match) that load and await this package before they execute.",
+  });
 
   const configure = (enabled: boolean) => writeFileSync(join(root, "lazy-loader.json"), JSON.stringify({
     packages: names.map((name) => ({
@@ -113,12 +116,18 @@ try {
   await pi.emit("session_start", { type: "session_start", reason: "startup" }, { hasUI: false, sessionManager: {} });
   assert.equal(loads.length, 0, "fresh cache must keep fixtures deferred");
 
-  const call = (toolName: string) => handlers[0]({ type: "tool_call", toolName, toolCallId: "test", input: {} });
-  assert.equal(await call("taskexecute"), undefined, "tool names are case-sensitive");
-  assert.equal(await call("Other"), undefined);
+  const notifications: [string, string][] = [];
+  const call = (toolName: string, hasUI = false) => handlers[0](
+    { type: "tool_call", toolName, toolCallId: "test", input: {} },
+    { hasUI, ui: { notify(message: string, type: string) { notifications.push([message, type]); } } },
+  );
+  assert.equal(await call("taskexecute", true), undefined, "tool names are case-sensitive");
+  assert.equal(await call("Other", true), undefined);
   assert.equal(loads.length, 0);
+  assert.deepEqual(notifications, []);
 
-  const first = call("TaskExecute");
+  const first = call("TaskExecute", true);
+  assert.deepEqual(notifications, [["pi-lazy-loader: loading dependency-a, dependency-b for TaskExecute…", "info"]]);
   await bothStarted.promise;
   let secondFinished = false;
   const second = call("TaskExecute").then((result: unknown) => {
@@ -132,8 +141,9 @@ try {
   assert.deepEqual(await Promise.all([first, second]), [undefined, undefined]);
   assert.deepEqual(ready.sort(), ["dependency-a", "dependency-b"], "session_start replay finishes before the tool");
   assert.deepEqual(loads, ["dependency-a", "dependency-b", "dependency-a", "dependency-b"]);
-  await call("TaskExecute");
+  await call("TaskExecute", true);
   assert.equal(loads.length, 4, "loaded packages are skipped");
+  assert.equal(notifications.length, 1, "headless and already-loaded calls must not notify");
 
   assert.equal(await call("Broken"), undefined, "reported load failure must not block");
   assert(errors.some((error) => error.startsWith("[pi-lazy-loader]") && error.includes("fixture failure")));
@@ -141,6 +151,10 @@ try {
   assert.equal(loads.filter((name) => name === "broken").length, 1, "failed packages are skipped");
   assert.equal(await call("Throw"), undefined, "unexpected rejection must not escape");
   assert(errors.some((error) => error.startsWith("[pi-lazy-loader]") && error.includes("unexpected rejection")));
+  assert.equal(await handlers[0]({ type: "tool_call", toolName: "Throw" }, {
+    hasUI: true, ui: { notify() { throw new Error("notify failure"); } },
+  }), undefined, "notification failure must not escape");
+  assert(errors.some((error) => error.includes("notify failure")));
   assert(!loads.includes("unrelated"));
   console.log("loadOnToolCall checks passed");
 } finally {

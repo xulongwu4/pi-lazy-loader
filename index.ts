@@ -72,12 +72,19 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
     }
   }
   if (loadOnToolCall.size > 0) {
-    pi.on("tool_call", async (e) => {
+    pi.on("tool_call", async (e, ctx) => {
+      const names = loadOnToolCall.get(e.toolName);
+      if (!names) return;
       // Await dependencies before execution, but never let a loading error block the calling tool.
       try {
-        await Promise.all((loadOnToolCall.get(e.toolName) ?? []).map(async (name) => {
+        const pending = names.filter((name) => {
           const status = loader.getPackageState(name)?.status;
-          if (status === "loaded" || status === "failed") return;
+          return status !== "loaded" && status !== "failed";
+        });
+        if (pending.length > 0 && ctx?.hasUI) {
+          ctx.ui.notify(`pi-lazy-loader: loading ${pending.join(", ")} for ${e.toolName}…`, "info");
+        }
+        await Promise.all(pending.map(async (name) => {
           const result = await loader.loadPackage(name);
           if (!result.success) console.error(`[pi-lazy-loader] Failed to load "${name}" on tool call "${e.toolName}": ${result.error}`);
         }));
