@@ -2,9 +2,9 @@
 
 General-purpose deferred extension loader for Pi coding agent. Packages listed in `${PI_CODING_AGENT_DIR:-~/.pi/agent}/lazy-loader.json` can be loaded mid-session without `/reload`; command and tool proxies are discovered from one persistent cache.
 
-## v0.17.1
+## v0.17.2
 
-- **Changed (0.17.1):** A lazy command renamed to `/name:N` because its name is taken is logged to the console only, no longer shown as a UI warning.
+- **Changed (0.17.1–0.17.2):** A lazy command renamed to `/name:N` because its name is taken is renamed silently: no UI warning (0.17.1) and no console line (0.17.2).
 - **Added (0.17.0):** Per-package `loadOnToolCall` loads and awaits a lazy package before a named tool runs, even one owned by another package (e.g. pi-tasks' `TaskExecute` wakes pi-subagents).
 - **Added (0.16.0):** Per-tool `toolExposure` overrides, and cache invalidation when a package's fingerprint changes (an upgraded package is re-cached at startup instead of changing tools mid-session).
 - **Fixed (0.16.0–0.16.1):** Tool proxies declare the cached description and schema verbatim, so loading the real tool no longer redeclares it and breaks the prompt cache. `prepareArguments` tools still hand off once on their first call.
