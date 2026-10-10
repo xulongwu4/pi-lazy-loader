@@ -277,8 +277,6 @@ export class LazyLoader {
         let suffix = 2; // the existing holder counts as the first
         while (taken(`${name}:${suffix}`)) suffix++;
         registered = `${name}:${suffix}`;
-        // Console only: no UI warning for renames.
-        console.error(`[pi-lazy-loader] Command "/${name}" from "${packageName}" is already registered; registering it as "/${registered}"`);
       }
       direct.set(name, registered);
     }

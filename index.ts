@@ -293,7 +293,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   // Post-bind proxy registration: runs in session_start where pi.getCommands() is legal.
   // Names already taken (eager commands, built-ins, other extensions) get a free /name:N
   // proxy (N >= 2) instead; the real command later commits under that same name.
-  // Called first thing in session_start; renames are logged to the console only (see /lazy list).
+  // Called first thing in session_start; renames are silent.
   let commandProxiesRegistered = false;
   function registerCommandProxies(): void {
     if (commandProxiesRegistered) return;
@@ -317,8 +317,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
         let suffix = 2;
         while (taken.has(`${def.commandName}:${suffix}`)) suffix++;
         const proxyName = `${def.commandName}:${suffix}`;
-        const diagnostic = `Command "/${def.commandName}" from "${def.packageName}" is already registered; registering it as "/${proxyName}"`;
-        console.error(`[pi-lazy-loader] ${diagnostic}`);
         def.proxyName = proxyName; // shared with /lazy list
         loader.reserveCommand(def.packageName, def.commandName, {
           declaredDescription: def.declaredDescription,

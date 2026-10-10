@@ -766,7 +766,7 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
         console.error = consoleError;
       }
       assert(!warnings.some((w) => w.includes("already registered")), `late rename must not reach the UI, got ${JSON.stringify(warnings)}`);
-      assert(logged.some((l) => l.includes('"dup-two" is already registered; registering it as "/cmd:3"')), `late rename must still be logged, got ${JSON.stringify(logged)}`);
+      assert(!logged.some((l) => l.includes("already registered")), `late rename must not be logged, got ${JSON.stringify(logged)}`);
       assert(names() === '["cmd","cmd:2","cmd:3"]' && fixture.registeredCommands.get("cmd") === eager, `foreign /cmd must bump unreserved late commands to a free /cmd:N, got ${names()}`);
       assert((await run("cmd:3", "x")) === "two:x", "bumped /cmd:3 must run dup-two");
       console.log("  ✓ Foreign owners bump unreserved late commands to a free /cmd:N");
