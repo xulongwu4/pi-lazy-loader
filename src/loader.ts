@@ -109,8 +109,6 @@ export class LazyLoader {
   private agentDir: string;
   private reservedCommands = new Map<string, Map<string, ReserveCommandOptions>>();
   private capturedCommands = new Map<string, Map<string, any>>();
-  /** Late-rename notices held for the session_start warning while set (see collectNotices). */
-  private pendingNotices: string[] | undefined;
   /** Unreserved late registrations per package: target name -> name registered with Pi. */
   private directCommands = new Map<string, Map<string, string>>();
   private reservedTools = new Map<string, Set<string>>();
@@ -279,16 +277,8 @@ export class LazyLoader {
         let suffix = 2; // the existing holder counts as the first
         while (taken(`${name}:${suffix}`)) suffix++;
         registered = `${name}:${suffix}`;
-        const message = `Command "/${name}" from "${packageName}" is already registered; registering it as "/${registered}"`;
-        if (this.pendingNotices) {
-          this.pendingNotices.push(message);
-        } else {
-          console.error(`[pi-lazy-loader] ${message}`);
-          const ctx = this.lifecycleState.sessionStart?.ctx;
-          try {
-            if (ctx?.hasUI) ctx.ui.notify(`pi-lazy-loader: ${message}`, "warning");
-          } catch {} // stale ctx after a session switch: the console line still records it
-        }
+        // Console only: no UI warning for renames.
+        console.error(`[pi-lazy-loader] Command "/${name}" from "${packageName}" is already registered; registering it as "/${registered}"`);
       }
       direct.set(name, registered);
     }
@@ -316,16 +306,6 @@ export class LazyLoader {
     }
   }
 
-  /** Hold late-rename notices (no console/UI output) until drainNotices() returns them. */
-  collectNotices(): void {
-    this.pendingNotices = [];
-  }
-
-  drainNotices(): string[] {
-    const notices = this.pendingNotices ?? [];
-    this.pendingNotices = undefined;
-    return notices;
-  }
 
   setSessionStart(event: any, ctx: any) {
     this.lifecycleState.sessionStart = { event, ctx };

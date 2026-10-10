@@ -157,28 +157,22 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
 
     // A missing or stale (fingerprint mismatch, e.g. upgraded) cache entry is bootstrapped by eagerly loading that package.
     const bootstrapDiagnostics: string[] = [];
-    // Late renames during bootstrap join the single startup warning instead of one toast each.
-    loader.collectNotices();
-    try {
-      for (const pkg of lazyPackages) {
-        const cached = cache.packages[pkg.name];
-        let current: string | undefined;
-        try {
-          current = packageFingerprint(pkg, loader.getAgentDir());
-        } catch {
-          // Unresolvable package: treat as changed; loadPackage reports the error.
-        }
-        if (cached && current !== undefined && cached.fingerprint === current
-          && !cached.tools.some((tool) => tool.requiresEagerLoad)) continue;
-        const loaded = await loader.loadPackage(pkg.name);
-        if (!loaded.success) {
-          // Keyed to package identity: retried after the package changes (or while unresolvable), not every startup.
-          updateCachedPackage(loader.getAgentDir(), pkg.name, [], [], current);
-          bootstrapDiagnostics.push(`Failed to populate cache for "${pkg.name}": ${loaded.error}`);
-        }
+    for (const pkg of lazyPackages) {
+      const cached = cache.packages[pkg.name];
+      let current: string | undefined;
+      try {
+        current = packageFingerprint(pkg, loader.getAgentDir());
+      } catch {
+        // Unresolvable package: treat as changed; loadPackage reports the error.
       }
-    } finally {
-      bootstrapDiagnostics.push(...loader.drainNotices());
+      if (cached && current !== undefined && cached.fingerprint === current
+        && !cached.tools.some((tool) => tool.requiresEagerLoad)) continue;
+      const loaded = await loader.loadPackage(pkg.name);
+      if (!loaded.success) {
+        // Keyed to package identity: retried after the package changes (or while unresolvable), not every startup.
+        updateCachedPackage(loader.getAgentDir(), pkg.name, [], [], current);
+        bootstrapDiagnostics.push(`Failed to populate cache for "${pkg.name}": ${loaded.error}`);
+      }
     }
     for (const diagnostic of bootstrapDiagnostics) console.error(`[pi-lazy-loader] ${diagnostic}`);
 
@@ -299,7 +293,7 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
   // Post-bind proxy registration: runs in session_start where pi.getCommands() is legal.
   // Names already taken (eager commands, built-ins, other extensions) get a free /name:N
   // proxy (N >= 2) instead; the real command later commits under that same name.
-  // Called first thing in session_start; diagnostics reach the UI via that handler's notify.
+  // Called first thing in session_start; renames are logged to the console only (see /lazy list).
   let commandProxiesRegistered = false;
   function registerCommandProxies(): void {
     if (commandProxiesRegistered) return;
@@ -324,7 +318,6 @@ export default function lazyLoaderExtension(pi: ExtensionAPI) {
         while (taken.has(`${def.commandName}:${suffix}`)) suffix++;
         const proxyName = `${def.commandName}:${suffix}`;
         const diagnostic = `Command "/${def.commandName}" from "${def.packageName}" is already registered; registering it as "/${proxyName}"`;
-        diagnostics.push(diagnostic);
         console.error(`[pi-lazy-loader] ${diagnostic}`);
         def.proxyName = proxyName; // shared with /lazy list
         loader.reserveCommand(def.packageName, def.commandName, {

@@ -711,7 +711,7 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
       lazyLoaderExtension(single.mockPi);
       const warnings: string[] = [];
       await single.mockPi.emitSessionStart({ hasUI: true, ui: { notify(message: string) { warnings.push(message); } } });
-      assert(warnings.some((w) => w.includes('registering it as "/cmd:2"')), `rename must be reported in the startup warning, got ${JSON.stringify(warnings)}`);
+      assert(!warnings.some((w) => w.includes("already registered")), `rename must not reach the UI, got ${JSON.stringify(warnings)}`);
       assert(single.registeredCommands.has("cmd:2") && single.registeredCommands.get("cmd") === eager, "single lazy /cmd behind a foreign /cmd must register as /cmd:2");
       assert((await single.registeredCommands.get("cmd:2").handler("z", { hasUI: false })) === "one:z", "/cmd:2 must load its package");
       // A cached literal "cmd:2" (dup-two) is not reused when dup-one's proxy moves off the foreign /cmd.
@@ -757,8 +757,16 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
       const { fixture, names, run } = await setupDup({ sessionCtx, twoCached: false, twoJs: oneJs.replaceAll("one", "two"), preRegistered: { cmd: eager } });
       fixtures.push(fixture);
       warnings.length = 0;
-      await fixture.registeredCommands.get("lazy").handler("add dup-two", { hasUI: false });
-      assert(warnings.some((w) => w.includes('"dup-two" is already registered; registering it as "/cmd:3"')), `late rename must reach the UI, got ${JSON.stringify(warnings)}`);
+      const logged: string[] = [];
+      const consoleError = console.error;
+      console.error = (...args: any[]) => { logged.push(args.join(" ")); };
+      try {
+        await fixture.registeredCommands.get("lazy").handler("add dup-two", { hasUI: false });
+      } finally {
+        console.error = consoleError;
+      }
+      assert(!warnings.some((w) => w.includes("already registered")), `late rename must not reach the UI, got ${JSON.stringify(warnings)}`);
+      assert(logged.some((l) => l.includes('"dup-two" is already registered; registering it as "/cmd:3"')), `late rename must still be logged, got ${JSON.stringify(logged)}`);
       assert(names() === '["cmd","cmd:2","cmd:3"]' && fixture.registeredCommands.get("cmd") === eager, `foreign /cmd must bump unreserved late commands to a free /cmd:N, got ${names()}`);
       assert((await run("cmd:3", "x")) === "two:x", "bumped /cmd:3 must run dup-two");
       console.log("  ✓ Foreign owners bump unreserved late commands to a free /cmd:N");
@@ -773,20 +781,15 @@ console.log("--- Check 4b: Hide reserved names from getCommands during load ---"
       console.log("  ✓ Bootstrapped uncached duplicates bump around startup proxies");
     }
     {
-      // Foreign /cmd: dup-one's proxy rename and dup-two's bootstrap rename share one startup warning.
+      // Foreign /cmd: dup-one's proxy rename and dup-two's bootstrap rename stay off the UI.
       const warnings: string[] = [];
       const sessionCtx = { hasUI: true, ui: { notify(message: string) { warnings.push(message); } } };
       const eager = { description: "eager", handler() { return "eager"; } };
       const { fixture, names } = await setupDup({ sessionCtx, preRegistered: { cmd: eager }, twoUncached: true, twoJs: oneJs.replaceAll("one", "two") });
       fixtures.push(fixture);
       assert(names() === '["cmd","cmd:2","cmd:3"]', `expected /cmd:2 proxy and /cmd:3 bootstrap rename, got ${names()}`);
-      assert(
-        warnings.length === 1 &&
-          warnings[0].includes('"dup-one" is already registered; registering it as "/cmd:2"') &&
-          warnings[0].includes('"dup-two" is already registered; registering it as "/cmd:3"'),
-        `bootstrap renames must join the single startup warning, got ${JSON.stringify(warnings)}`
-      );
-      console.log("  ✓ Bootstrap renames join the single startup warning");
+      assert(!warnings.some((w) => w.includes("already registered")), `renames must not reach the UI, got ${JSON.stringify(warnings)}`);
+      console.log("  ✓ Startup and bootstrap renames stay off the UI");
     }
     {
       // Every package keeps its rank between the bootstrap session and the following cached session.
