@@ -76,7 +76,7 @@ function assertStable(requests: any[][], label: string) {
 
 /** Fixture package: "probe" (live exposure under test), "trigger" (codemode, never overridden),
  *  and optionally "late", registered on the first trigger call, i.e. after the load commit. */
-function setup(name: string, live: string, toolExposure?: Record<string, string>, withLate = false) {
+function setup(name: string, live: string, toolExposure?: Record<string, string> | string, withLate = false) {
   const agentDir = join(root, name);
   const fixture = join(agentDir, "fixture");
   const trace = join(agentDir, "trace");
@@ -94,7 +94,7 @@ export default function(pi) {
   tool("probe", ${JSON.stringify(live === "direct" ? undefined : live)});
   tool("trigger", "codemode", () => { if (!late) { late = true; tool("late", "direct"); } });
 }`);
-  const configure = (overrides?: Record<string, string>) => writeFileSync(join(agentDir, "lazy-loader.json"),
+  const configure = (overrides?: Record<string, string> | string) => writeFileSync(join(agentDir, "lazy-loader.json"),
     JSON.stringify({ packages: [overrides ? { source: fixture, toolExposure: overrides } : fixture] }));
   configure(toolExposure);
   const readTrace = () => readFileSync(trace, "utf8");
@@ -121,7 +121,8 @@ try {
       return readLazyLoaderConfig(dir);
     };
     assert.deepEqual(catalog({ probe: "codemode", " late ": "hidden" }).packages[0].toolExposure, { probe: "codemode", late: "hidden" });
-    for (const bad of [[], "codemode", null, { probe: "model-only" }, { probe: "typo" }, { "": "direct" }, { "a\nb": "direct" }]) {
+    assert.equal(catalog("codemode").packages[0].toolExposure, "codemode");
+    for (const bad of [[], "typo", "model-only", "", null, { probe: "model-only" }, { probe: "typo" }, { "": "direct" }, { "a\nb": "direct" }]) {
       const result = catalog(bad);
       assert.equal(result.packages.length, 0, JSON.stringify(bad));
       assert.match(result.diagnostics.join(";"), /toolExposure/, JSON.stringify(bad));
@@ -131,6 +132,7 @@ try {
       return readLazyLoaderConfig(dir);
     };
     assert.deepEqual(inline({ toolExposure: { probe: "deferred" } }).packages[0].toolExposure, { probe: "deferred" });
+    assert.equal(inline({ toolExposure: "hidden" }).packages[0].toolExposure, "hidden");
     const invalid = inline({ tools: ["probe"], toolExposure: { probe: "bogus" } });
     assert.equal(invalid.packages.length, 1, "an invalid inline toolExposure must not drop the package");
     assert.equal(invalid.packages[0].toolExposure, undefined);
@@ -146,6 +148,10 @@ try {
     assert.equal(effectiveExposure(def, "other", "direct"), "direct");
     assert.equal(effectiveExposure(def, "constructor", undefined), undefined, "only own override keys apply");
     assert.equal(effectiveExposure({ name: "p", source: "p" }, "probe", "deferred"), "deferred");
+    const all = { name: "p", source: "p", toolExposure: "codemode" as const };
+    for (const [live, expected] of [[undefined, "codemode"], ["direct", "codemode"], ["deferred", "codemode"], ["hidden", "hidden"], ["model-only", "model-only"]]) {
+      assert.equal(effectiveExposure(all, "anything", live), expected, `catch-all ${live}`);
+    }
     console.log("PASS toolExposure config parsing and exposure policy");
   }
 
@@ -193,7 +199,7 @@ try {
   for (const mode of ["on", "only"] as const) {
     for (const live of ["hidden", "model-only"]) {
       const label = `${mode}/${live}`;
-      const fx = setup(`promote-${mode}-${live}`, live, { probe: "codemode" });
+      const fx = setup(`promote-${mode}-${live}`, live, "codemode");
       await bootstrap(fx, mode);
       const s = await open(fx.agentDir, mode);
       try {
@@ -235,19 +241,20 @@ try {
   }
   console.log("PASS override removal uses the raw cache without bootstrap");
 
-  // (4) Late registrations (after the load commit) get the effective exposure, uncached and cached.
-  {
-    const fx = setup("late", "direct", { late: "codemode" }, true);
+  // (4) Late registrations (after the load commit) get the effective exposure, uncached and cached,
+  // for both the per-tool and the catch-all override form.
+  for (const [form, overrides] of [["per-tool", { late: "codemode" }], ["catch-all", "codemode"]] as const) {
+    const fx = setup(`late-${form}`, "direct", overrides, true);
     await bootstrap(fx, "on");
     for (const pass of ["uncached", "cached"]) {
       const s = await open(fx.agentDir, "on");
       try {
-        if (pass === "cached") assert.equal(s.session.getToolDefinition("late")?.exposure, "codemode", "late proxy");
+        if (pass === "cached") assert.equal(s.session.getToolDefinition("late")?.exposure, "codemode", `${form}: late proxy`);
         await s.say("hi");
         assert.match(await s.code("text(await tools.trigger({value:4}))"), /trigger:4/);
-        assert.equal(s.session.getToolDefinition("late")?.exposure, "codemode", `${pass}: late registration`);
+        assert.equal(s.session.getToolDefinition("late")?.exposure, "codemode", `${form}/${pass}: late registration`);
         assert.match(await s.code("text(await tools.late({value:5}))"), /late:5/);
-        if (pass === "cached") assertStable(s.requests, "late/cached");
+        if (pass === "cached") assertStable(s.requests, `late/${form}/cached`);
       } finally {
         s.session.dispose();
       }

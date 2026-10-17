@@ -35,10 +35,15 @@
                 "items": { "type": "string", "minLength": 1 }
               },
               "toolExposure": {
-                "description": "Per-tool exposure override by exact tool name. Applies to direct/codemode/deferred tools only; hidden and model-only tools are never promoted.",
-                "type": "object",
-                "propertyNames": { "minLength": 1 },
-                "additionalProperties": { "enum": ["direct", "codemode", "deferred", "hidden"] }
+                "description": "Exposure override: one exposure for every tool the package registers, or per tool by exact name. Applies to direct/codemode/deferred tools only; hidden and model-only tools are never promoted.",
+                "oneOf": [
+                  { "enum": ["direct", "codemode", "deferred", "hidden"] },
+                  {
+                    "type": "object",
+                    "propertyNames": { "minLength": 1 },
+                    "additionalProperties": { "enum": ["direct", "codemode", "deferred", "hidden"] }
+                  }
+                ]
               }
             }
           }

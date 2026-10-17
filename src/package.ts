@@ -16,15 +16,18 @@ export interface PackageDefinition {
   proxyCommands?: string[];
   proxyTools?: string[];
   loadOnToolCall?: string[];
-  toolExposure?: Record<string, ToolExposureOverride>;
+  /** A bare exposure is a catch-all for every tool the package registers. */
+  toolExposure?: ToolExposureOverride | Record<string, ToolExposureOverride>;
 }
 
 /** Configured exposure for a tool. Only direct/codemode/deferred (undefined = Pi's direct) are
  *  overridable; hidden, model-only and unknown values always win, so an override never promotes. */
 export function effectiveExposure(definition: PackageDefinition | undefined, toolName: string, liveExposure: unknown): unknown {
   const overrides = definition?.toolExposure;
-  if (!overrides || !Object.hasOwn(overrides, toolName)) return liveExposure;
-  return ["direct", "codemode", "deferred"].includes((liveExposure ?? "direct") as string) ? overrides[toolName] : liveExposure;
+  const override = typeof overrides === "string" ? overrides
+    : overrides && Object.hasOwn(overrides, toolName) ? overrides[toolName] : undefined;
+  if (override === undefined) return liveExposure;
+  return ["direct", "codemode", "deferred"].includes((liveExposure ?? "direct") as string) ? override : liveExposure;
 }
 
 /** Same object when the policy leaves the tool unchanged; otherwise a flat view with the effective exposure.

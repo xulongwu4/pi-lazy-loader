@@ -23,12 +23,17 @@ function proxyNames(value: unknown, field: string, source: string): string[] {
   return [...new Set(names)];
 }
 
-function toolExposure(value: unknown, field: string, source: string): Record<string, ToolExposureOverride> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`"${field}" for "${source}" must be an object`);
+function toolExposure(value: unknown, field: string, source: string): ToolExposureOverride | Record<string, ToolExposureOverride> {
+  const expected = `expected ${TOOL_EXPOSURE_OVERRIDES.join(", ")}`;
+  if (typeof value === "string") {
+    if (!(TOOL_EXPOSURE_OVERRIDES as readonly unknown[]).includes(value)) throw new Error(`"${field}" for "${source}" is an invalid exposure (${expected})`);
+    return value as ToolExposureOverride;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`"${field}" for "${source}" must be an exposure string or an object`);
   proxyNames(Object.keys(value), field, source);
   return Object.fromEntries(Object.entries(value).map(([name, exposure]) => {
     if (!(TOOL_EXPOSURE_OVERRIDES as readonly unknown[]).includes(exposure)) {
-      throw new Error(`"${field}" for "${source}" has an invalid exposure for "${name}" (expected ${TOOL_EXPOSURE_OVERRIDES.join(", ")})`);
+      throw new Error(`"${field}" for "${source}" has an invalid exposure for "${name}" (${expected})`);
     }
     return [name.trim(), exposure];
   }));

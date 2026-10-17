@@ -187,8 +187,11 @@ Changes to `lazy-loader.json` take effect after restarting Pi or issuing `/reloa
 
 A package entry may set `"toolExposure": { "<tool name>": "direct" | "codemode" | "deferred" | "hidden" }` (catalog object form, or inside the inline `"lazy": {...}` options). Names are exact; there are no globs.
 
+A bare string instead of an object (`"toolExposure": "codemode"`) is a catch-all: it applies to every tool the package registers, under the same rules below.
+
 ```json
 { "source": "npm:pi-web-access", "extensions": [], "lazy": { "toolExposure": { "web_search": "codemode", "fetch_content": "hidden" } } }
+{ "source": "npm:pi-mcp-adapter", "extensions": [], "lazy": { "toolExposure": "codemode" } }
 ```
 
 - The override applies only when the package registers the tool as `direct` (or without an exposure), `codemode`, or `deferred`. A tool the package registers as `hidden` or `model-only` is never promoted.
